@@ -1,0 +1,7 @@
+# CI fills this directory at build-time with:
+#   - install-silent.ps1
+#   - docker-compose.yml
+#   - .env.template
+#   - OctoPOS.Admin_*.msi   (downloaded from the GitHub release)
+#   - octopos-updater.exe   (compiled from ../../companion-service)
+#   - tenant.json           (injected by the platform per branch)

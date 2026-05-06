@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OctoPOS Setup",
+  "version": "0.0.0",
+  "identifier": "com.nonlyweb.octopos-bootstrapper",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OctoPOS Setup",
+        "width": 480,
+        "height": 360,
+        "resizable": false,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "displayLanguageSelector": false,
+        "languages": ["Spanish"]
+      }
+    },
+    "icon": ["icons/icon.ico"],
+    "resources": ["embedded/*"]
+  }
+}

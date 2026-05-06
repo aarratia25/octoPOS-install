@@ -1,0 +1,12 @@
+# CI fills this directory at build-time. Anything dropped in here at
+# release time should not be tracked — it gets rebuilt from sibling
+# repos and the release artifacts.
+*.exe
+*.msi
+*.ps1
+*.sh
+*.yml
+.env*
+tenant.json
+!.gitkeep
+!.gitignore
