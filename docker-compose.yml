@@ -71,6 +71,13 @@ services:
       # Mount the host Docker socket so the backup module can run
       # `docker exec octopos-mongodb mongodump` at runtime.
       - /var/run/docker.sock:/var/run/docker.sock
+      # The updates module reads + rewrites the host's .env to pin the
+      # next API tag, then runs `docker compose up -d --force-recreate`
+      # against the same compose file. Bind-mount the install dir so
+      # both files are reachable from inside the container. RW because
+      # `.env` must be editable; the docker-compose.yml itself is
+      # read-only by convention (we never rewrite it at runtime).
+      - /opt/octopos:/host/opt/octopos
     ports:
       - "${API_PORT:-3000}:3000"
     # `wget` ships with node:22-alpine. The endpoint always returns 200
