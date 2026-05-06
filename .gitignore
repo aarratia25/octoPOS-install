@@ -1,0 +1,5 @@
+/companion-service/target/
+/bootstrapper/src-tauri/target/
+/bootstrapper/node_modules/
+/bootstrapper/dist-build/
+
