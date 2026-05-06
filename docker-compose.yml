@@ -23,6 +23,13 @@ services:
       - mongo_data:/data/db
     ports:
       - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+    # Mongo's official image ships `mongosh`; ping is the cheapest call
+    # that proves both the daemon is up and the auth layer is loaded.
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   api:
     # Pinned in .env (OCTOPOS_API_IMAGE, OCTOPOS_API_VERSION) so the
@@ -31,8 +38,13 @@ services:
     image: ${OCTOPOS_API_IMAGE:-ghcr.io/aarratia25/octopos-admin-api}:${OCTOPOS_API_VERSION:-latest}
     container_name: octopos-api
     restart: unless-stopped
+    # `service_healthy` makes the API wait for Mongo's healthcheck instead
+    # of just for its container to start. Without this the API can boot
+    # against a Mongo that is still loading auth data and the very first
+    # connection drops with `MongoServerSelectionError`.
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -42,8 +54,6 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://localhost:1430,http://localhost:1420,tauri://localhost,https://tauri.localhost,http://tauri.localhost}
       APP_VERSION: ${OCTOPOS_API_VERSION:-latest}
       OCTOPOS_KEY_PATH: /app/data/.encryption-key
-      GITHUB_REPO: ${GITHUB_REPO:-aarratia25/octoPOS-admin}
-      UPDATES_CRON_ENABLED: ${UPDATES_CRON_ENABLED:-true}
       BACKUP_LOCAL_PATH: /app/backups
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
       BACKUP_CRON_ENABLED: ${BACKUP_CRON_ENABLED:-true}
@@ -63,6 +73,17 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "${API_PORT:-3000}:3000"
+    # `wget` ships with node:22-alpine. The endpoint always returns 200
+    # while the HTTP server is up — even if Mongo is down, the JSON body
+    # carries `mongoUp:false` and Compose still considers the API
+    # healthy. That's intentional: the API container is healthy as long
+    # as it accepts requests; Mongo has its own healthcheck above.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
 
 volumes:
   mongo_data:
