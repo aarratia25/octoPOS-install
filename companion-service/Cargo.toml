@@ -34,11 +34,20 @@ simplelog = "0.12"
 windows-service = "0.7"
 
 # Named pipe + Windows API access for the IPC layer.
+# Each of CreateNamedPipeW / ConnectNamedPipe / ReadFile / WriteFile
+# pulls in OVERLAPPED, which in windows-sys 0.59 lives behind
+# `Win32_System_IO` — without that feature the import paths fail to
+# resolve at compile time on Windows. Pin to 0.52 (used by tauri-sys
+# 2.x's transitive deps) so cargo's resolver lands on a single
+# windows-sys version across the workspace and we don't drag two MB
+# of duplicate metadata.
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.59"
 features = [
   "Win32_Foundation",
-  "Win32_System_Pipes",
-  "Win32_Storage_FileSystem",
   "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
 ]
