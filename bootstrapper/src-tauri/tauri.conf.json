@@ -10,9 +10,11 @@
     "windows": [
       {
         "title": "OctoPOS Setup",
-        "width": 480,
-        "height": 360,
-        "resizable": false,
+        "width": 720,
+        "height": 640,
+        "minWidth": 640,
+        "minHeight": 560,
+        "resizable": true,
         "fullscreen": false,
         "center": true,
         "decorations": true,

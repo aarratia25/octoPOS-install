@@ -60,6 +60,14 @@
         margin-bottom: 4px;
         display: block;
       }
+      .hint {
+        font-size: 11px;
+        color: #64748b;
+        margin-top: 4px;
+        font-family: monospace;
+        min-height: 14px;
+      }
+      .hint strong { color: #94a3b8; font-weight: 500; }
       input {
         width: 100%;
         padding: 9px 12px;
@@ -142,17 +150,17 @@
         Ingresá los datos que te dio el proveedor. La instalación tarda
         10 a 15 minutos.
       </div>
-      <form id="install-form">
+      <form id="install-form" novalidate>
         <div>
           <label for="branch">Sucursal</label>
           <input
             id="branch"
             name="branch"
             type="text"
-            placeholder="ej. principal"
+            placeholder="ej. San Bernardino"
             autocomplete="off"
-            required
           />
+          <div class="hint" id="slug-hint"></div>
         </div>
         <div>
           <label for="apikey">Clave de la plataforma</label>
@@ -162,7 +170,6 @@
             type="password"
             placeholder="********"
             autocomplete="off"
-            required
           />
         </div>
         <button type="submit" id="submit-btn">Instalar</button>
@@ -194,9 +201,45 @@
       const form = document.getElementById("install-form");
       const submitBtn = document.getElementById("submit-btn");
       const formErr = document.getElementById("form-err");
+      const branchInput = document.getElementById("branch");
+      const apikeyInput = document.getElementById("apikey");
+      const slugHint = document.getElementById("slug-hint");
       const fill = document.getElementById("fill");
       const msg = document.getElementById("msg");
       const runErr = document.getElementById("run-err");
+
+      // Strip diacritics, lowercase, replace any run of non-alphanumeric
+      // chars with a single hyphen, trim hyphens off the ends. Keeps
+      // only ASCII a-z 0-9 and -, which is the slug shape the
+      // platform expects (matches the ConvertTo-Slug helper from the
+      // legacy install.ps1).
+      function toSlug(value) {
+        return value
+          .normalize("NFD")
+          .replace(/[̀-ͯ]/g, "")
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+      }
+
+      function showFormError(message) {
+        formErr.textContent = message;
+        formErr.classList.add("visible");
+      }
+
+      function clearFormError() {
+        formErr.classList.remove("visible");
+      }
+
+      // Live slug preview so the technician sees what we'll send to
+      // the platform.
+      branchInput.addEventListener("input", () => {
+        const slug = toSlug(branchInput.value);
+        slugHint.innerHTML = slug
+          ? `Identificador: <strong>${slug}</strong>`
+          : "";
+      });
 
       listen("setup-progress", (event) => {
         const { percent, message } = event.payload;
@@ -211,16 +254,36 @@
 
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const branch = document.getElementById("branch").value.trim();
-        const apikey = document.getElementById("apikey").value.trim();
-        if (!branch || !apikey) return;
+        clearFormError();
 
-        formErr.classList.remove("visible");
+        const rawBranch = branchInput.value.trim();
+        const apikey = apikeyInput.value.trim();
+
+        if (!rawBranch) {
+          showFormError("Ingresá el nombre de la sucursal.");
+          branchInput.focus();
+          return;
+        }
+        if (!apikey) {
+          showFormError("Ingresá la clave de la plataforma.");
+          apikeyInput.focus();
+          return;
+        }
+
+        const slug = toSlug(rawBranch);
+        if (!slug) {
+          showFormError(
+            "El nombre de la sucursal debe tener al menos una letra o número.",
+          );
+          branchInput.focus();
+          return;
+        }
+
         submitBtn.disabled = true;
         submitBtn.textContent = "Validando...";
 
         try {
-          await invoke("start_install", { branchSlug: branch, apiKey: apikey });
+          await invoke("start_install", { branchSlug: slug, apiKey: apikey });
           formView.classList.add("hidden");
           progressView.classList.remove("hidden");
         } catch (err) {
