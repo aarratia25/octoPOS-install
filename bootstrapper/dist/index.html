@@ -193,54 +193,6 @@
     </div>
 
     <script type="module">
-      // Tauri injects window.__TAURI__ at runtime inside the desktop
-      // shell. When the file is opened in a plain browser (during UI
-      // dev) we stub it so the form still works end-to-end and we
-      // can iterate on layout / validations without rebuilding the
-      // .exe each time. The stub also fires a fake progress timeline
-      // so the bar + step text are testable in-browser.
-      if (!window.__TAURI__) {
-        const listeners = new Map();
-        const noopUnlisten = () => {};
-        const FAKE_TIMELINE = [
-          [2, "Verificando requisitos del sistema..."],
-          [8, "Descomprimiendo recursos..."],
-          [15, "Verificando WSL2 y Ubuntu..."],
-          [40, "Instalando Docker y dependencias..."],
-          [70, "Levantando servicios (Mongo + API)..."],
-          [80, "Servidor listo"],
-          [85, "Instalando OctoPOS Admin..."],
-          [92, "Registrando servicio de actualizaciones..."],
-          [98, "Creando acceso directo..."],
-          [100, "Listo. OctoPOS esta instalado."],
-        ];
-        window.__TAURI__ = {
-          event: {
-            listen: async (name, handler) => {
-              listeners.set(name, handler);
-              return noopUnlisten;
-            },
-          },
-          core: {
-            invoke: async (cmd, args) => {
-              console.info("[stub] invoke()", cmd, args);
-              if (cmd !== "start_install") return null;
-              // Drive the fake timeline 800 ms apart so a tester
-              // can watch the whole flow without waiting 15 minutes.
-              const handler = listeners.get("setup-progress");
-              if (handler) {
-                FAKE_TIMELINE.forEach(([percent, message], idx) => {
-                  setTimeout(() => {
-                    handler({ payload: { percent, message } });
-                  }, 800 * idx);
-                });
-              }
-              return null;
-            },
-          },
-        };
-      }
-
       const { listen } = window.__TAURI__.event;
       const { invoke } = window.__TAURI__.core;
 
