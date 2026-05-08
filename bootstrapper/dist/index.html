@@ -193,6 +193,54 @@
     </div>
 
     <script type="module">
+      // Tauri injects window.__TAURI__ at runtime inside the desktop
+      // shell. When the file is opened in a plain browser (during UI
+      // dev) we stub it so the form still works end-to-end and we
+      // can iterate on layout / validations without rebuilding the
+      // .exe each time. The stub also fires a fake progress timeline
+      // so the bar + step text are testable in-browser.
+      if (!window.__TAURI__) {
+        const listeners = new Map();
+        const noopUnlisten = () => {};
+        const FAKE_TIMELINE = [
+          [2, "Verificando requisitos del sistema..."],
+          [8, "Descomprimiendo recursos..."],
+          [15, "Verificando WSL2 y Ubuntu..."],
+          [40, "Instalando Docker y dependencias..."],
+          [70, "Levantando servicios (Mongo + API)..."],
+          [80, "Servidor listo"],
+          [85, "Instalando OctoPOS Admin..."],
+          [92, "Registrando servicio de actualizaciones..."],
+          [98, "Creando acceso directo..."],
+          [100, "Listo. OctoPOS esta instalado."],
+        ];
+        window.__TAURI__ = {
+          event: {
+            listen: async (name, handler) => {
+              listeners.set(name, handler);
+              return noopUnlisten;
+            },
+          },
+          core: {
+            invoke: async (cmd, args) => {
+              console.info("[stub] invoke()", cmd, args);
+              if (cmd !== "start_install") return null;
+              // Drive the fake timeline 800 ms apart so a tester
+              // can watch the whole flow without waiting 15 minutes.
+              const handler = listeners.get("setup-progress");
+              if (handler) {
+                FAKE_TIMELINE.forEach(([percent, message], idx) => {
+                  setTimeout(() => {
+                    handler({ payload: { percent, message } });
+                  }, 800 * idx);
+                });
+              }
+              return null;
+            },
+          },
+        };
+      }
+
       const { listen } = window.__TAURI__.event;
       const { invoke } = window.__TAURI__.core;
 
@@ -213,15 +261,29 @@
       // only ASCII a-z 0-9 and -, which is the slug shape the
       // platform expects (matches the ConvertTo-Slug helper from the
       // legacy install.ps1).
+      // Combining diacritics. Built via constructor so the source
+      // file stays plain ASCII — embedding the literal range
+      // characters caused the script to fail to parse on some
+      // browsers and silently fall back to native form submit, which
+      // wiped both inputs on click.
+      const DIACRITIC_RE = new RegExp("[\\u0300-\\u036f]", "g");
       function toSlug(value) {
         return value
           .normalize("NFD")
-          .replace(/[̀-ͯ]/g, "")
+          .replace(DIACRITIC_RE, "")
           .toLowerCase()
           .trim()
           .replace(/[^a-z0-9]+/g, "-")
           .replace(/^-+|-+$/g, "");
       }
+
+      // The platform issues keys in exactly this shape:
+      //   AAAA-BBBB-CCCC-DDDD  (uppercase hex, dashes mandatory)
+      // Anything else is rejected — the platform stores the literal
+      // string and looks it up exact-match, so accepting a relaxed
+      // form here would only let the technician submit something the
+      // backend immediately fails to find.
+      const KEY_RE = /^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/;
 
       function showFormError(message) {
         formErr.textContent = message;
@@ -279,11 +341,22 @@
           return;
         }
 
+        if (!KEY_RE.test(apikey)) {
+          showFormError(
+            "La clave debe tener el formato XXXX-XXXX-XXXX-XXXX en mayúsculas (ej. 5091-74D2-F1AE-909F).",
+          );
+          apikeyInput.focus();
+          return;
+        }
+
         submitBtn.disabled = true;
         submitBtn.textContent = "Validando...";
 
         try {
-          await invoke("start_install", { branchSlug: slug, apiKey: apikey });
+          await invoke("start_install", {
+            branchSlug: slug,
+            apiKey: apikey,
+          });
           formView.classList.add("hidden");
           progressView.classList.remove("hidden");
         } catch (err) {
