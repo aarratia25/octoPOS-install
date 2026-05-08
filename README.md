@@ -74,9 +74,11 @@ Mongo es lo que más RAM consume; reservá 8 GB+ para 5+ cajas.
 
 ## 4. Instalación
 
-1. Descargá el último `OctoPOS-Setup-vX.Y.Z.exe`:
-
-   <https://github.com/aarratia25/octoPOS-releases/releases/latest>
+1. Abrí <https://github.com/aarratia25/octoPOS-releases/releases/latest>
+   y bajá **`OctoPOS-Setup-vX.Y.Z.exe`** (el que empieza con
+   `OctoPOS-Setup-`, no los otros). Es lo único que tenés que
+   descargar — los demás `.exe` / `.msi` los usa el instalador
+   internamente.
 
 2. Doble-click. Aceptás el UAC una vez.
 
