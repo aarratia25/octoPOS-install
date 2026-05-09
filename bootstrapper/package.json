@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
-  }
+  },
+  "description": "OctoPOS Setup — one-click bootstrapper (WSL2 + Docker + Mongo + API + admin)",
+  "author": "nonlyweb",
+  "license": "UNLICENSED"
 }
