@@ -18,7 +18,7 @@ require_env() {
 
 for v in \
   ADMIN_RAW_BASE ADMIN_MONGO_USER ADMIN_MONGO_DB ADMIN_MONGO_PASSWORD \
-  ADMIN_JWT_SECRET ADMIN_PLATFORM_URL ADMIN_PLATFORM_API_KEY ADMIN_BRANCH_SLUG; do
+  ADMIN_JWT_SECRET ADMIN_PLATFORM_URL; do
   require_env "$v"
 done
 
@@ -58,7 +58,7 @@ curl -fsSL "$ADMIN_RAW_BASE/docker-compose.yml" -o "$COMPOSE_FILE"
 if [[ -f "$ENV_FILE" ]]; then
   ok '.env ya existe — respetando los valores actuales.'
 else
-  step 'Escribiendo .env con los datos del onboarding...'
+  step 'Escribiendo .env con secrets locales (license + branch los maneja el admin después)...'
   curl -fsSL "$ADMIN_RAW_BASE/.env.example" -o "$ENV_FILE"
   esc() { printf '%s' "$1" | sed -e 's/[\/&|]/\\&/g'; }
   sed -i "s|^MONGO_USER=.*|MONGO_USER=$(esc "$ADMIN_MONGO_USER")|"               "$ENV_FILE"
@@ -66,8 +66,12 @@ else
   sed -i "s|^MONGO_PASSWORD=.*|MONGO_PASSWORD=$(esc "$ADMIN_MONGO_PASSWORD")|"   "$ENV_FILE"
   sed -i "s|^JWT_SECRET=.*|JWT_SECRET=$(esc "$ADMIN_JWT_SECRET")|"               "$ENV_FILE"
   sed -i "s|^PLATFORM_URL=.*|PLATFORM_URL=$(esc "$ADMIN_PLATFORM_URL")|"         "$ENV_FILE"
-  sed -i "s|^PLATFORM_API_KEY=.*|PLATFORM_API_KEY=$(esc "$ADMIN_PLATFORM_API_KEY")|" "$ENV_FILE"
-  sed -i "s|^BRANCH_SLUG=.*|BRANCH_SLUG=$(esc "$ADMIN_BRANCH_SLUG")|"             "$ENV_FILE"
+  # The license key + branch slug are captured by the OctoPOS Admin's
+  # activation screen the first time it launches; nothing tenant-
+  # specific lives in this .env. Auth between the local API and the
+  # platform happens via the activation token (Ed25519-signed) — no
+  # shared secret is distributed.
+
   chmod 600 "$ENV_FILE"
   ok '.env listo y protegido (chmod 600).'
 fi

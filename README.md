@@ -76,19 +76,24 @@ Mongo es lo que más RAM consume; reservá 8 GB+ para 5+ cajas.
 
 1. Abrí <https://github.com/aarratia25/octoPOS-releases/releases/latest>
    y bajá **`OctoPOS-Setup-vX.Y.Z.exe`** (el que empieza con
-   `OctoPOS-Setup-`, no los otros). Es lo único que tenés que
-   descargar — los demás `.exe` / `.msi` los usa el instalador
-   internamente.
+   `OctoPOS-Setup-`). Es lo único que tenés que descargar — los demás
+   `.exe` / `.msi` los baja el instalador solo en runtime desde el
+   mismo release.
 
 2. Doble-click. Aceptás el UAC una vez.
 
-3. Llená los dos campos:
-   - **Sucursal** — slug que te dio el proveedor (ej: `principal`).
-   - **Clave de la plataforma** — la key del cliente.
+3. Esperá. El instalador muestra un splash con barra de progreso y
+   hace todo solo: WSL2 + Ubuntu + Docker + Mongo + API + admin.
+   Tarda 10–15 minutos. Si Windows pide reiniciar, el instalador
+   reanuda solo después del reboot.
 
-4. Click en **Instalar** y dejá la ventana abierta. Tarda 10–15 minutos.
+4. Cuando termina, el OctoPOS Admin abre solo. Ahí pide la **clave
+   de licencia** y la **sucursal** una sola vez — es el único momento
+   en que un humano interactúa. La activación valida contra la
+   plataforma y queda guardada en la máquina.
 
-Cuando termine, el OctoPOS Admin abre solo, ya activado.
+5. El instalador se borra solo de "Programas y características" después
+   de terminar — sólo queda **OctoPOS Admin** en la lista.
 
 ---
 
@@ -106,5 +111,5 @@ listo. No se vuelve a abrir este instalador.
 |---|---|
 | SmartScreen bloquea el `.exe` | Click "Más información" → "Ejecutar de todas formas". |
 | Pide reiniciar Windows | Reiniciá. El instalador continúa solo después del reboot. |
-| Form rechaza la sucursal o la clave | Verificalo con el proveedor. |
+| El admin rechaza la clave o la sucursal | Verificá con el proveedor que la licencia esté ACTIVA y la sucursal exista. |
 | Cualquier otro error | Compartí con el proveedor el archivo `%ProgramData%\OctoPOS\setup.log`. |

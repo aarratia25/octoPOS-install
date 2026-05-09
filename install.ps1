@@ -134,16 +134,10 @@ Write-Host ''
 Write-Host '--- Autenticacion API ---------------' -ForegroundColor DarkGray
 $JwtSecret = Read-Secret 'clave JWT (JWT_SECRET)'
 
-Write-Host ''
-Write-Host '--- Conexion con la plataforma ------' -ForegroundColor DarkGray
-$PlatformUrl    = $DefaultPlatformUrl
-$PlatformApiKey = Read-Required 'API key de la plataforma (secreto compartido)'
-$BranchName     = Read-Required 'Nombre de la sucursal (ej: San Bernardino)'
-$BranchSlug     = ConvertTo-Slug $BranchName
-if ([string]::IsNullOrWhiteSpace($BranchSlug)) {
-  Fail "No se pudo generar slug a partir de '$BranchName'."
-}
-Success "Slug generado: $BranchSlug"
+$PlatformUrl = $DefaultPlatformUrl
+# Branch slug + license key are captured by the OctoPOS Admin's
+# activation screen the first time the operator opens the panel.
+# Nothing tenant-specific is asked here.
 
 Write-Host ''
 
@@ -173,7 +167,7 @@ function Convert-WindowsToWslPath($p) {
 $wslPath = Convert-WindowsToWslPath $sh
 $env:WSLENV = (@(
   'ADMIN_RAW_BASE/u','ADMIN_MONGO_USER/u','ADMIN_MONGO_DB/u','ADMIN_MONGO_PASSWORD/u',
-  'ADMIN_JWT_SECRET/u','ADMIN_PLATFORM_URL/u','ADMIN_PLATFORM_API_KEY/u','ADMIN_BRANCH_SLUG/u'
+  'ADMIN_JWT_SECRET/u','ADMIN_PLATFORM_URL/u'
 ) -join ':')
 $env:ADMIN_RAW_BASE         = $RawBase
 $env:ADMIN_MONGO_USER       = $MongoUser
@@ -181,8 +175,6 @@ $env:ADMIN_MONGO_DB         = $MongoDb
 $env:ADMIN_MONGO_PASSWORD   = $MongoPassword
 $env:ADMIN_JWT_SECRET       = $JwtSecret
 $env:ADMIN_PLATFORM_URL     = $PlatformUrl
-$env:ADMIN_PLATFORM_API_KEY = $PlatformApiKey
-$env:ADMIN_BRANCH_SLUG      = $BranchSlug
 
 wsl -d $DistroName -u root bash $wslPath
 if ($LASTEXITCODE -ne 0) { Fail 'install.sh fallo - revisa los logs arriba.' }

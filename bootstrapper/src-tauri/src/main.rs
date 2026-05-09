@@ -45,41 +45,36 @@ fn main() {
         .expect("error while running OctoPOS bootstrapper");
 }
 
-/// JS calls this once after the operator submits the form. We claim
-/// the install lock, spawn the worker thread and return — the UI
-/// switches to the progress view as soon as we resolve.
+/// JS fires this once when the window finishes painting. The pipeline
+/// is fire-and-forget: we spawn the worker thread and return so the
+/// UI stays responsive. Subsequent invocations are ignored — the
+/// install lock guarantees a single run per process.
+///
+/// The pipeline takes no arguments. License key, branch and role are
+/// captured later by the OctoPOS Admin's own activation screen — the
+/// bootstrapper only owns the system-level setup (WSL, Docker, the
+/// containers, the .msi, the companion service).
 #[tauri::command]
 fn start_install(
     handle: AppHandle,
     state: State<'_, InstallState>,
-    branch_slug: String,
-    api_key: String,
 ) -> Result<(), String> {
-    let branch = branch_slug.trim().to_string();
-    let key = api_key.trim().to_string();
-    if branch.is_empty() {
-        return Err("La sucursal es obligatoria.".to_string());
-    }
-    if key.is_empty() {
-        return Err("La clave de la plataforma es obligatoria.".to_string());
-    }
-
     {
         let mut started = state
             .started
             .lock()
             .map_err(|e| format!("lock poisoned: {e}"))?;
         if *started {
-            return Err("La instalación ya está en curso.".to_string());
+            return Ok(());
         }
         *started = true;
     }
 
     let h = handle.clone();
     std::thread::spawn(move || {
-        // Tiny grace period to let the window paint the progress view.
+        // Tiny grace period to let the window paint.
         std::thread::sleep(std::time::Duration::from_millis(120));
-        if let Err(e) = run_install(&h, &branch, &key) {
+        if let Err(e) = run_install(&h) {
             let _ = h.emit("setup-error", ErrorEvent { message: e });
         }
     });
@@ -87,11 +82,7 @@ fn start_install(
 }
 
 #[cfg(windows)]
-fn run_install(
-    handle: &AppHandle,
-    branch_slug: &str,
-    api_key: &str,
-) -> Result<(), String> {
+fn run_install(handle: &AppHandle) -> Result<(), String> {
     progress(handle, 2, "Verificando requisitos del sistema...");
     pre_check_system().map_err(|e| e.to_string())?;
 
@@ -102,7 +93,7 @@ fn run_install(
         .map_err(|e| format!("resource_dir: {e}"))?;
     let embedded = resource_dir.join("embedded");
 
-    progress(handle, 15, "Verificando WSL2 y Ubuntu...");
+    progress(handle, 15, "Preparando entorno...");
     let need_reboot = ensure_wsl(handle).map_err(|e| e.to_string())?;
     if need_reboot {
         progress(handle, 25, "Configurando reanudacion despues del reboot...");
@@ -115,14 +106,13 @@ fn run_install(
         return Ok(());
     }
 
-    progress(handle, 40, "Instalando Docker y dependencias...");
-    run_silent_installer(handle, &embedded, branch_slug, api_key)
-        .map_err(|e| e.to_string())?;
+    progress(handle, 40, "Instalando dependencias...");
+    run_silent_installer(handle, &embedded).map_err(|e| e.to_string())?;
 
-    progress(handle, 70, "Levantando servicios (Mongo + API)...");
+    progress(handle, 70, "Instalando base de datos y servidor...");
     wait_for_api_health(handle).map_err(|e| e.to_string())?;
 
-    progress(handle, 85, "Instalando OctoPOS Admin...");
+    progress(handle, 85, "Descargando e instalando el panel...");
     install_admin_msi(&embedded).map_err(|e| e.to_string())?;
 
     progress(handle, 92, "Registrando servicio de actualizaciones...");
@@ -135,12 +125,20 @@ fn run_install(
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     let _ = launch_admin();
+    // Stub-installer pattern (Chrome / Discord style): the bootstrapper
+    // is a one-shot. Once the admin .msi is installed and the companion
+    // service is wired, the bootstrapper has nothing to offer — keeping
+    // its entry in Add/Remove Programs invites accidental re-runs that
+    // would re-pull images and rewrite `.env`. Schedule a deferred
+    // self-uninstall and exit; the user only sees "OctoPOS Admin" in
+    // Programs from now on.
+    let _ = schedule_self_uninstall();
     handle.exit(0);
     Ok(())
 }
 
 #[cfg(not(windows))]
-fn run_install(handle: &AppHandle, _branch: &str, _key: &str) -> Result<(), String> {
+fn run_install(handle: &AppHandle) -> Result<(), String> {
     progress(handle, 0, "Solo Windows soportado.");
     Err("This bootstrapper only runs on Windows.".to_string())
 }
@@ -209,8 +207,6 @@ fn ensure_wsl(_handle: &AppHandle) -> Result<bool, String> {
 fn run_silent_installer(
     _handle: &AppHandle,
     embedded: &std::path::Path,
-    branch_slug: &str,
-    api_key: &str,
 ) -> Result<(), String> {
     use std::process::Command;
 
@@ -219,42 +215,12 @@ fn run_silent_installer(
         return Err(format!("install-silent.ps1 no encontrado en {ps1:?}"));
     }
 
-    // Optional tenant.json (generated by the platform's per-branch
-    // download endpoint) overrides the form values when present —
-    // useful for branded ISOs where the operator does not see any UI.
-    let tenant_path = embedded.join("tenant.json");
-    let tenant: serde_json::Value = if tenant_path.exists() {
-        std::fs::read_to_string(&tenant_path)
-            .ok()
-            .and_then(|body| serde_json::from_str(&body).ok())
-            .unwrap_or_else(|| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
-    let final_branch = tenant
-        .get("branchSlug")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(branch_slug);
-    let final_key = tenant
-        .get("platformApiKey")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(api_key);
-    let platform_url = tenant
-        .get("platformUrl")
-        .and_then(|v| v.as_str())
-        .unwrap_or("https://platform.octo-pos.net");
-    let mongo_password = tenant
-        .get("mongoPassword")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let jwt_secret = tenant
-        .get("jwtSecret")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-
+    // Tenant data (license key, branch, role) is captured by the
+    // OctoPOS Admin's own activation screen the first time it
+    // launches — the bootstrapper does not need any of that. We only
+    // pass machine-local secrets that the script auto-generates if
+    // empty (Mongo password, JWT secret) and the canonical platform
+    // URL so the API can phone home once the operator activates.
     let status = Command::new("powershell")
         .args([
             "-NoProfile",
@@ -263,19 +229,12 @@ fn run_silent_installer(
             "-File",
             ps1.to_str().unwrap_or(""),
         ])
-        .env("OCTOPOS_BRANCH_SLUG", final_branch)
-        .env("OCTOPOS_PLATFORM_API_KEY", final_key)
-        .env("OCTOPOS_PLATFORM_URL", platform_url)
-        .env("OCTOPOS_MONGO_PASSWORD", mongo_password)
-        .env("OCTOPOS_JWT_SECRET", jwt_secret)
+        .env("OCTOPOS_PLATFORM_URL", "https://platform.octo-pos.net")
         .status()
         .map_err(|e| format!("powershell spawn: {e}"))?;
 
     match status.code() {
         Some(0) => Ok(()),
-        Some(2) => Err(
-            "Faltan variables de entorno requeridas (codigo 2).".to_string(),
-        ),
         Some(3) => Err("__REBOOT_REQUIRED__".to_string()),
         Some(c) => Err(format!("install-silent.ps1 fallo con codigo {c}")),
         None => Err("install-silent.ps1 termino sin codigo de salida".to_string()),
@@ -305,24 +264,100 @@ fn wait_for_api_health(handle: &AppHandle) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn install_admin_msi(embedded: &std::path::Path) -> Result<(), String> {
+fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
     use std::process::Command;
-    let msi = std::fs::read_dir(embedded)
-        .map_err(|e| format!("read_dir embedded: {e}"))?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("msi"))
-        .ok_or_else(|| "No se encontro el .msi del admin en recursos.".to_string())?;
-    let status = Command::new("msiexec")
-        .args(["/i", msi.to_str().unwrap_or(""), "/quiet", "/qn"])
-        .status()
-        .map_err(|e| format!("msiexec spawn: {e}"))?;
-    if !status.success() {
+
+    // Pull metadata for the latest published admin release from the
+    // public mirror repo. We hit the GitHub REST API with curl
+    // (ships with Windows 10 1803+), parse the JSON with serde, and
+    // pick the first .msi asset. Doing this at install time means
+    // the bootstrapper itself does not have to be rebuilt every
+    // time we publish a new admin version — running an old
+    // OctoPOS-Setup.exe still installs whatever the latest release
+    // says is current.
+    let api_url = "https://api.github.com/repos/aarratia25/octoPOS-releases/releases/latest";
+    let metadata_out = Command::new("curl")
+        .args([
+            "-fsSL",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "User-Agent: OctoPOS-Setup",
+            api_url,
+        ])
+        .output()
+        .map_err(|e| format!("curl spawn: {e}"))?;
+    if !metadata_out.status.success() {
         return Err(format!(
-            "msiexec termino con codigo {}",
-            status.code().unwrap_or(-1)
+            "No se pudo consultar releases de GitHub (codigo {}).",
+            metadata_out.status.code().unwrap_or(-1)
         ));
     }
+
+    let metadata: serde_json::Value = serde_json::from_slice(&metadata_out.stdout)
+        .map_err(|e| format!("parse releases JSON: {e}"))?;
+    let assets = metadata
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .ok_or_else(|| "Respuesta de GitHub sin 'assets'.".to_string())?;
+    let msi_asset = assets
+        .iter()
+        .find(|a| {
+            a.get("name")
+                .and_then(|n| n.as_str())
+                .is_some_and(|n| n.to_lowercase().ends_with(".msi"))
+        })
+        .ok_or_else(|| "El ultimo release no tiene un .msi.".to_string())?;
+    let msi_url = msi_asset
+        .get("browser_download_url")
+        .and_then(|u| u.as_str())
+        .ok_or_else(|| "Asset .msi sin browser_download_url.".to_string())?;
+    let msi_name = msi_asset
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("OctoPOS-Admin.msi");
+
+    let temp_dir = std::env::temp_dir();
+    let temp_msi = temp_dir.join(msi_name);
+
+    let download_status = Command::new("curl")
+        .args([
+            "-fsSL",
+            "-H",
+            "User-Agent: OctoPOS-Setup",
+            "-o",
+            temp_msi.to_str().unwrap_or(""),
+            msi_url,
+        ])
+        .status()
+        .map_err(|e| format!("curl download: {e}"))?;
+    if !download_status.success() {
+        return Err(format!(
+            "Descarga del .msi fallo (codigo {}).",
+            download_status.code().unwrap_or(-1)
+        ));
+    }
+
+    let install_status = Command::new("msiexec")
+        .args([
+            "/i",
+            temp_msi.to_str().unwrap_or(""),
+            "/quiet",
+            "/qn",
+        ])
+        .status()
+        .map_err(|e| format!("msiexec spawn: {e}"))?;
+    if !install_status.success() {
+        return Err(format!(
+            "msiexec termino con codigo {}",
+            install_status.code().unwrap_or(-1)
+        ));
+    }
+
+    // Best-effort cleanup; if the file lingers in %TEMP% Windows
+    // cleans it on its own at the next disk-cleanup pass.
+    let _ = std::fs::remove_file(&temp_msi);
+
     Ok(())
 }
 
@@ -421,6 +456,49 @@ fn launch_admin() -> Result<(), String> {
     let _ = Command::new("cmd")
         .args(["/c", "start", "", &target])
         .status();
+    Ok(())
+}
+
+#[cfg(windows)]
+fn schedule_self_uninstall() -> Result<(), String> {
+    use std::io::Write;
+    use std::process::Command;
+
+    // Write a tiny .bat to %TEMP% that:
+    //   1. Waits ~5s so the bootstrapper process can fully exit
+    //      (NSIS will refuse to remove a binary that is still running).
+    //   2. Looks up the uninstaller via the Add/Remove Programs entry
+    //      keyed by DisplayName, so we don't hardcode an install path.
+    //      Tauri/NSIS writes that key with productName from
+    //      tauri.conf.json — match it exactly.
+    //   3. Runs the uninstaller in silent mode (`/S`).
+    //   4. Deletes the .bat itself so nothing stays behind.
+    //
+    // Failures here are best-effort — if anything goes wrong the worst
+    // case is the user still sees "OctoPOS Setup" in Programs and can
+    // remove it by hand. We never let this break the install flow.
+    let bat_path = std::env::temp_dir().join("octopos-setup-cleanup.bat");
+    let bat_body = r#"@echo off
+timeout /t 5 /nobreak >nul
+powershell -NoProfile -Command "$e=(Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'OctoPOS Setup' } | Select-Object -First 1); if ($e) { $u = $e.UninstallString -replace '^\"|\"$',''; Start-Process -FilePath $u -ArgumentList '/S' -Wait }"
+del /f /q "%~f0"
+"#;
+    let mut f = std::fs::File::create(&bat_path)
+        .map_err(|e| format!("create cleanup bat: {e}"))?;
+    f.write_all(bat_body.as_bytes())
+        .map_err(|e| format!("write cleanup bat: {e}"))?;
+    drop(f);
+
+    Command::new("cmd")
+        .args([
+            "/c",
+            "start",
+            "/min",
+            "",
+            bat_path.to_str().unwrap_or(""),
+        ])
+        .spawn()
+        .map_err(|e| format!("spawn cleanup bat: {e}"))?;
     Ok(())
 }
 

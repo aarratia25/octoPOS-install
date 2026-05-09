@@ -19,92 +19,35 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        padding: 24px 32px;
-        gap: 18px;
+        padding: 32px;
+        gap: 24px;
       }
       .logo {
-        width: 72px;
-        height: 72px;
-        border-radius: 18px;
+        width: 96px;
+        height: 96px;
+        border-radius: 24px;
         background: #10b981;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 42px;
+        font-size: 56px;
         font-weight: 700;
         color: #0f172a;
-        letter-spacing: -1px;
+        letter-spacing: -2px;
       }
       .title {
-        font-size: 20px;
+        font-size: 22px;
         font-weight: 600;
       }
       .subtitle {
-        font-size: 13px;
+        font-size: 14px;
         color: #94a3b8;
         text-align: center;
-        max-width: 360px;
-      }
-      form {
-        width: 100%;
-        max-width: 320px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        margin-top: 4px;
-      }
-      label {
-        font-size: 12px;
-        font-weight: 500;
-        color: #cbd5e1;
-        margin-bottom: 4px;
-        display: block;
-      }
-      .hint {
-        font-size: 11px;
-        color: #64748b;
-        margin-top: 4px;
-        font-family: monospace;
-        min-height: 14px;
-      }
-      .hint strong { color: #94a3b8; font-weight: 500; }
-      input {
-        width: 100%;
-        padding: 9px 12px;
-        background: rgba(15, 23, 42, 0.6);
-        border: 1px solid rgba(148, 163, 184, 0.3);
-        border-radius: 6px;
-        color: #f8fafc;
-        font-size: 13px;
-        font-family: inherit;
-        outline: none;
-        transition: border-color 150ms;
-      }
-      input:focus {
-        border-color: #10b981;
-      }
-      button {
-        width: 100%;
-        padding: 10px;
-        background: #10b981;
-        color: #0f172a;
-        border: none;
-        border-radius: 6px;
-        font-size: 14px;
-        font-weight: 600;
-        cursor: pointer;
-        font-family: inherit;
-        transition: background 150ms;
-      }
-      button:hover:not(:disabled) { background: #34d399; }
-      button:disabled {
-        background: #475569;
-        color: #94a3b8;
-        cursor: not-allowed;
+        max-width: 420px;
       }
       .progress-wrap {
         width: 100%;
-        max-width: 380px;
+        max-width: 420px;
       }
       .progress-bar {
         height: 6px;
@@ -120,68 +63,34 @@
         border-radius: 999px;
       }
       .progress-text {
-        margin-top: 10px;
-        font-size: 12px;
+        margin-top: 12px;
+        font-size: 13px;
         color: #cbd5e1;
         text-align: center;
-        min-height: 16px;
+        min-height: 18px;
       }
       .error {
-        margin-top: 12px;
-        padding: 10px 14px;
+        margin-top: 16px;
+        padding: 12px 16px;
         background: rgba(239, 68, 68, 0.15);
         border: 1px solid rgba(239, 68, 68, 0.4);
-        border-radius: 6px;
+        border-radius: 8px;
         color: #fca5a5;
-        font-size: 12px;
-        max-width: 320px;
+        font-size: 13px;
+        max-width: 420px;
         text-align: center;
         display: none;
       }
       .error.visible { display: block; }
-      .hidden { display: none !important; }
     </style>
   </head>
   <body>
-    <div class="root" id="form-view">
-      <div class="logo">O</div>
-      <div class="title">Instalar OctoPOS</div>
-      <div class="subtitle">
-        Ingresá los datos que te dio el proveedor. La instalación tarda
-        10 a 15 minutos.
-      </div>
-      <form id="install-form" novalidate>
-        <div>
-          <label for="branch">Sucursal</label>
-          <input
-            id="branch"
-            name="branch"
-            type="text"
-            placeholder="ej. San Bernardino"
-            autocomplete="off"
-          />
-          <div class="hint" id="slug-hint"></div>
-        </div>
-        <div>
-          <label for="apikey">Clave de la plataforma</label>
-          <input
-            id="apikey"
-            name="apikey"
-            type="password"
-            placeholder="********"
-            autocomplete="off"
-          />
-        </div>
-        <button type="submit" id="submit-btn">Instalar</button>
-      </form>
-      <div class="error" id="form-err"></div>
-    </div>
-
-    <div class="root hidden" id="progress-view">
+    <div class="root">
       <div class="logo">O</div>
       <div class="title">Instalando OctoPOS</div>
-      <div class="subtitle" id="subtitle">
-        Esto puede tardar entre 5 y 15 minutos. No cierres esta ventana.
+      <div class="subtitle">
+        Esto puede tardar entre 5 y 15 minutos la primera vez.
+        No cierres esta ventana — al terminar, el panel se abre solo.
       </div>
       <div class="progress-wrap">
         <div class="progress-bar">
@@ -189,71 +98,14 @@
         </div>
         <div class="progress-text" id="msg">Iniciando...</div>
       </div>
-      <div class="error" id="run-err"></div>
+      <div class="error" id="err"></div>
     </div>
-
     <script type="module">
       const { listen } = window.__TAURI__.event;
       const { invoke } = window.__TAURI__.core;
-
-      const formView = document.getElementById("form-view");
-      const progressView = document.getElementById("progress-view");
-      const form = document.getElementById("install-form");
-      const submitBtn = document.getElementById("submit-btn");
-      const formErr = document.getElementById("form-err");
-      const branchInput = document.getElementById("branch");
-      const apikeyInput = document.getElementById("apikey");
-      const slugHint = document.getElementById("slug-hint");
       const fill = document.getElementById("fill");
       const msg = document.getElementById("msg");
-      const runErr = document.getElementById("run-err");
-
-      // Strip diacritics, lowercase, replace any run of non-alphanumeric
-      // chars with a single hyphen, trim hyphens off the ends. Keeps
-      // only ASCII a-z 0-9 and -, which is the slug shape the
-      // platform expects (matches the ConvertTo-Slug helper from the
-      // legacy install.ps1).
-      // Combining diacritics. Built via constructor so the source
-      // file stays plain ASCII — embedding the literal range
-      // characters caused the script to fail to parse on some
-      // browsers and silently fall back to native form submit, which
-      // wiped both inputs on click.
-      const DIACRITIC_RE = new RegExp("[\\u0300-\\u036f]", "g");
-      function toSlug(value) {
-        return value
-          .normalize("NFD")
-          .replace(DIACRITIC_RE, "")
-          .toLowerCase()
-          .trim()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "");
-      }
-
-      // The platform issues keys in exactly this shape:
-      //   AAAA-BBBB-CCCC-DDDD  (uppercase hex, dashes mandatory)
-      // Anything else is rejected — the platform stores the literal
-      // string and looks it up exact-match, so accepting a relaxed
-      // form here would only let the technician submit something the
-      // backend immediately fails to find.
-      const KEY_RE = /^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/;
-
-      function showFormError(message) {
-        formErr.textContent = message;
-        formErr.classList.add("visible");
-      }
-
-      function clearFormError() {
-        formErr.classList.remove("visible");
-      }
-
-      // Live slug preview so the technician sees what we'll send to
-      // the platform.
-      branchInput.addEventListener("input", () => {
-        const slug = toSlug(branchInput.value);
-        slugHint.innerHTML = slug
-          ? `Identificador: <strong>${slug}</strong>`
-          : "";
-      });
+      const err = document.getElementById("err");
 
       listen("setup-progress", (event) => {
         const { percent, message } = event.payload;
@@ -262,61 +114,20 @@
       });
 
       listen("setup-error", (event) => {
-        runErr.textContent = event.payload.message ?? "Error desconocido.";
-        runErr.classList.add("visible");
+        err.textContent = event.payload.message ?? "Error desconocido.";
+        err.classList.add("visible");
       });
 
-      form.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        clearFormError();
-
-        const rawBranch = branchInput.value.trim();
-        const apikey = apikeyInput.value.trim();
-
-        if (!rawBranch) {
-          showFormError("Ingresá el nombre de la sucursal.");
-          branchInput.focus();
-          return;
-        }
-        if (!apikey) {
-          showFormError("Ingresá la clave de la plataforma.");
-          apikeyInput.focus();
-          return;
-        }
-
-        const slug = toSlug(rawBranch);
-        if (!slug) {
-          showFormError(
-            "El nombre de la sucursal debe tener al menos una letra o número.",
-          );
-          branchInput.focus();
-          return;
-        }
-
-        if (!KEY_RE.test(apikey)) {
-          showFormError(
-            "La clave debe tener el formato XXXX-XXXX-XXXX-XXXX en mayúsculas (ej. 5091-74D2-F1AE-909F).",
-          );
-          apikeyInput.focus();
-          return;
-        }
-
-        submitBtn.disabled = true;
-        submitBtn.textContent = "Validando...";
-
-        try {
-          await invoke("start_install", {
-            branchSlug: slug,
-            apiKey: apikey,
-          });
-          formView.classList.add("hidden");
-          progressView.classList.remove("hidden");
-        } catch (err) {
-          formErr.textContent = String(err);
-          formErr.classList.add("visible");
-          submitBtn.disabled = false;
-          submitBtn.textContent = "Instalar";
-        }
+      // Kick off the install pipeline as soon as the window finishes
+      // painting. The Rust side is idempotent — every step skips
+      // itself when the prerequisite is already present, so re-runs
+      // (and runs on machines that already have WSL/Docker) just
+      // breeze through the early steps in seconds.
+      window.addEventListener("DOMContentLoaded", () => {
+        invoke("start_install").catch((e) => {
+          err.textContent = String(e);
+          err.classList.add("visible");
+        });
       });
     </script>
   </body>
