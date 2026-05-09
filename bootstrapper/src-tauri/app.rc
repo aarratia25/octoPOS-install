@@ -1,5 +1,0 @@
-// Resource script that wires the Win32 manifest above into the
-// final .exe. The magic numbers `1 24` are the Microsoft-defined
-// id + type for an executable's embedded manifest — Windows looks
-// for exactly that pair on launch.
-1 24 "app.manifest"

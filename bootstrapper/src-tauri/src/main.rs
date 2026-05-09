@@ -45,11 +45,61 @@ struct InstallState {
 }
 
 fn main() {
+    // Self-elevate before Tauri spins up. Embedding a manifest in the
+    // exe (the "right" way) collides with the one tauri-build already
+    // ships (`CVT1100: duplicate resource type:MANIFEST`), so we
+    // detect elevation at runtime and re-launch ourselves with the
+    // `runas` verb when needed. UAC fires once, before any window is
+    // painted, exactly like the Discord / NVIDIA Experience pattern.
+    #[cfg(windows)]
+    {
+        if !is_elevated() {
+            let _ = relaunch_as_admin();
+            return;
+        }
+    }
+
     tauri::Builder::default()
         .manage(InstallState::default())
         .invoke_handler(tauri::generate_handler![start_install, open_setup_log])
         .run(tauri::generate_context!())
         .expect("error while running OctoPOS bootstrapper");
+}
+
+/// Probes the current process token by calling `net session`, which
+/// the OS gates on local administrator privileges. A non-zero exit
+/// (or spawn failure) means we are running unelevated. We could call
+/// `OpenProcessToken` + `GetTokenInformation` for the same answer,
+/// but that drags `windows-sys` into the dependency tree just for
+/// this one boolean — the `net` shellout is good enough and adds no
+/// new deps. CREATE_NO_WINDOW prevents a console flash.
+#[cfg(windows)]
+fn is_elevated() -> bool {
+    silent_command("net")
+        .args(["session"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Re-launches the current binary through `Start-Process -Verb RunAs`,
+/// which triggers the consent prompt and starts the elevated copy.
+/// We deliberately drop our own process the moment we kick off the
+/// re-launch — the elevated child takes over from here. If the user
+/// clicks No on UAC, no window appears at all, which is the expected
+/// behaviour for a stub installer.
+#[cfg(windows)]
+fn relaunch_as_admin() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    // Quote-escape any single quotes in the path (rare but possible)
+    // so the PowerShell argument stays well-formed.
+    let escaped = exe.to_string_lossy().replace('\'', "''");
+    let ps_command = format!("Start-Process -FilePath '{escaped}' -Verb RunAs");
+    silent_command("powershell")
+        .args(["-NoProfile", "-Command", &ps_command])
+        .spawn()
+        .map_err(|e| format!("spawn elevated child: {e}"))?;
+    Ok(())
 }
 
 /// Lets the splash open `%ProgramData%\OctoPOS\setup.log` in the user's
