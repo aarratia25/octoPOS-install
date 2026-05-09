@@ -6,29 +6,41 @@
 #            entradas de Add/Remove Programs, shortcuts, registry,
 #            ProgramData\OctoPOS.
 #   WSL:     /opt/octopos, containers octopos-api / octopos-mongodb /
-#            octopos-autoheal, volúmenes huérfanos, imágenes de
+#            octopos-autoheal, volumenes huerfanos, imagenes de
 #            ghcr.io/aarratia25/octopos-admin-api.
 #
 # Idempotente: si algo no existe, lo skipea sin error. Pensado para que
-# vos como integrador puedas resetear y volver a empezar entre pruebas.
+# el integrador pueda resetear y volver a empezar entre pruebas.
 #
 # NO toca otros stacks Docker que puedas tener corriendo (ej.
-# octopos-web-mongodb, octopos-platform-*) ni la imagen mongo:7 — es
-# compartida y la próxima instalación la reusa de cache.
+# octopos-web-mongodb, octopos-platform-*) ni la imagen mongo:7: es
+# compartida y la proxima instalacion la reusa de cache.
+#
+# Nota: los mensajes salen sin acentos a proposito. Windows PowerShell
+# 5.1 no renderiza UTF-8 de forma consistente en la consola clasica;
+# los acentos y caracteres de dibujo Unicode salen como `?`. Mantenemos
+# espaniol pero ASCII-safe.
 #
 # Uso:
-#   Abrí PowerShell como Administrador y ejecutá:
+#   Abri PowerShell como Administrador y ejecuta:
 #     iwr -useb https://raw.githubusercontent.com/aarratia25/octoPOS-install/main/uninstall.ps1 | iex
 
 #Requires -RunAsAdministrator
 $ErrorActionPreference = 'Continue'
+
+# Hint to the console driver to expect UTF-8. Helps when the bash
+# heredoc below pipes log lines through. Harmless on consoles that
+# don't honor it.
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
 
 function Step($m)    { Write-Host "==> $m" -ForegroundColor Cyan }
 function Success($m) { Write-Host "    $m" -ForegroundColor Green }
 function Skip($m)    { Write-Host "    $m" -ForegroundColor DarkGray }
 function Warn($m)    { Write-Host "    $m" -ForegroundColor Yellow }
 
-# ── Windows ───────────────────────────────────────────────────────────
+# --- Windows ---
 
 Step 'Deteniendo servicio OctoPOSUpdater...'
 $svc = Get-Service OctoPOSUpdater -ErrorAction SilentlyContinue
@@ -74,7 +86,7 @@ if ($setupEntries) {
     }
     Success 'Setup desinstalado.'
 } else {
-    Skip 'No quedó residual (auto-uninstall hizo su trabajo).'
+    Skip 'No quedo residual (auto-uninstall hizo su trabajo).'
 }
 
 Step 'Borrando shortcut del escritorio...'
@@ -84,7 +96,7 @@ if (Test-Path $shortcut) {
     Remove-Item $shortcut -Force
     Success 'Shortcut borrado.'
 } else {
-    Skip 'No existía.'
+    Skip 'No existia.'
 }
 
 Step 'Borrando registro HKLM\Software\OctoPOS...'
@@ -92,7 +104,7 @@ if (Test-Path 'HKLM:\Software\OctoPOS') {
     Remove-Item 'HKLM:\Software\OctoPOS' -Recurse -Force
     Success 'Borrado.'
 } else {
-    Skip 'No existía.'
+    Skip 'No existia.'
 }
 
 Step 'Borrando RunOnce de resume post-reboot...'
@@ -101,7 +113,7 @@ if (Get-ItemProperty $runOnce -Name OctoPOSBootstrapResume -ErrorAction Silently
     Remove-ItemProperty $runOnce -Name OctoPOSBootstrapResume -Force
     Success 'Borrado.'
 } else {
-    Skip 'No existía.'
+    Skip 'No existia.'
 }
 
 Step 'Borrando C:\ProgramData\OctoPOS (logs + secretos)...'
@@ -109,10 +121,10 @@ if (Test-Path 'C:\ProgramData\OctoPOS') {
     Remove-Item 'C:\ProgramData\OctoPOS' -Recurse -Force
     Success 'Borrado.'
 } else {
-    Skip 'No existía.'
+    Skip 'No existia.'
 }
 
-# ── WSL ────────────────────────────────────────────────────────────────
+# --- WSL ---
 
 Step 'Verificando WSL...'
 if ($null -eq (Get-Command wsl -ErrorAction SilentlyContinue)) {
@@ -139,7 +151,7 @@ if ($null -eq (Get-Command wsl -ErrorAction SilentlyContinue)) {
         Step "Limpiando dentro de $distro..."
 
         # Heredoc bash con todo el cleanup. Llega a stdin de wsl bash via
-        # la pipeline de PowerShell — así no tenemos que escribir un
+        # la pipeline de PowerShell - asi no tenemos que escribir un
         # archivo intermedio en el host.
         $bash = @'
 set +e
@@ -149,7 +161,7 @@ if [ -f /opt/octopos/docker-compose.yml ]; then
     docker compose down -v 2>/dev/null
     echo "   stack bajado"
 else
-    echo "   /opt/octopos no existía"
+    echo "   /opt/octopos no existia"
 fi
 
 echo "=> Borrando /opt/octopos y /tmp/octopos-test..."
@@ -163,7 +175,7 @@ imgs=$(docker images -q ghcr.io/aarratia25/octopos-admin-api 2>/dev/null)
 if [ -n "$imgs" ]; then
     docker rmi -f $imgs 2>/dev/null | sed "s/^/   /"
 else
-    echo "   no había"
+    echo "   no habia"
 fi
 
 echo "=> Borrando volumenes octopos_* (del docker-compose nuestro)..."
@@ -194,14 +206,14 @@ ls /opt/octopos 2>/dev/null || echo "  (no existe)"
 }
 
 Write-Host ''
-Write-Host '────────────────────────────────────────────────────────────' -ForegroundColor Green
+Write-Host '------------------------------------------------------------' -ForegroundColor Green
 Write-Host ' Limpieza completa.'                                          -ForegroundColor Green
-Write-Host ' El equipo está virgen para probar el bootstrapper de nuevo.' -ForegroundColor Green
-Write-Host '────────────────────────────────────────────────────────────' -ForegroundColor Green
+Write-Host ' El equipo esta virgen para probar el bootstrapper de nuevo.' -ForegroundColor Green
+Write-Host '------------------------------------------------------------' -ForegroundColor Green
 Write-Host ''
-Write-Host '  Próximo paso:'
-Write-Host '    1. Bajá el ultimo OctoPOS-Setup-vX.Y.Z.exe de:'
+Write-Host '  Proximo paso:'
+Write-Host '    1. Baja el ultimo OctoPOS-Setup-vX.Y.Z.exe de:'
 Write-Host '       https://github.com/aarratia25/octoPOS-releases/releases/latest'
-Write-Host '    2. Doble-click. Aceptá el UAC.'
-Write-Host '    3. Mirá el panel de log mientras instala.'
+Write-Host '    2. Doble-click. Acepta el UAC.'
+Write-Host '    3. Mira el panel de log mientras instala.'
 Write-Host ''
