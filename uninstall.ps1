@@ -116,10 +116,32 @@ if (Get-ItemProperty $runOnce -Name OctoPOSBootstrapResume -ErrorAction Silently
     Skip 'No existia.'
 }
 
+Step 'Cerrando bootstrappers en ejecucion (mantienen setup.log abierto)...'
+$killed = 0
+Get-Process -Name 'octopos-bootstrapper', 'OctoPOS Setup' -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; $killed++ }
+# Notepad se abre desde el boton "Abrir setup.log" — si el log esta
+# abierto en Notepad, Remove-Item no puede borrarlo. Cerramos los que
+# tengan ese archivo en el titulo.
+Get-Process -Name notepad -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainWindowTitle -like '*setup.log*' } |
+    ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; $killed++ }
+if ($killed -gt 0) {
+    Success "$killed proceso(s) cerrado(s)."
+    Start-Sleep -Milliseconds 500   # dar tiempo a Windows a liberar handles
+} else {
+    Skip 'Ninguno corriendo.'
+}
+
 Step 'Borrando C:\ProgramData\OctoPOS (logs + secretos)...'
 if (Test-Path 'C:\ProgramData\OctoPOS') {
-    Remove-Item 'C:\ProgramData\OctoPOS' -Recurse -Force
-    Success 'Borrado.'
+    Remove-Item 'C:\ProgramData\OctoPOS' -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path 'C:\ProgramData\OctoPOS') {
+        Warn 'Algunos archivos no se pudieron borrar (handle abierto?).'
+        Warn 'Cerrar la ventana del bootstrapper / Notepad y reejecutar.'
+    } else {
+        Success 'Borrado.'
+    }
 } else {
     Skip 'No existia.'
 }
