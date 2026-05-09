@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <!--
+    OctoPOS Setup is a system-level installer: it provisions WSL2,
+    drops files in C:\Program Files, registers a Windows service,
+    creates a scheduled task at SYSTEM scope and writes registry
+    keys under HKLM. None of that works without elevation.
+
+    Without this manifest the .exe inherits the SAM user's standard
+    token even when the NSIS installer ran with UAC. Embedding the
+    manifest forces UAC to fire on launch (one prompt, before the
+    splash paints) so every PowerShell / WSL / sc / schtasks /
+    msiexec / reg child it spawns inherits admin and the inner
+    install-silent.ps1 stops bouncing on its #Requires line.
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <!-- Declare modern Windows compatibility so manifest-aware APIs
+       (PerMonitorV2 DPI, modern common controls, etc.) report the
+       real OS rather than emulating Vista. -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/> <!-- Windows 10/11 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/> <!-- Windows 8.1 -->
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/> <!-- Windows 8 -->
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/> <!-- Windows 7 -->
+    </application>
+  </compatibility>
+</assembly>

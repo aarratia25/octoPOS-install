@@ -110,6 +110,36 @@
         flex-shrink: 0;
       }
       .error.visible { display: block; }
+      .error a, .open-log-btn {
+        color: #fca5a5;
+        text-decoration: underline;
+        cursor: pointer;
+        background: none;
+        border: none;
+        font: inherit;
+        padding: 0;
+      }
+      .error a:hover, .open-log-btn:hover { color: #fecaca; }
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        font-size: 11px;
+        color: #64748b;
+        flex-shrink: 0;
+      }
+      .toolbar button {
+        background: rgba(148, 163, 184, 0.1);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        color: #cbd5e1;
+        padding: 4px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font: inherit;
+      }
+      .toolbar button:hover {
+        background: rgba(148, 163, 184, 0.2);
+        color: #f8fafc;
+      }
     </style>
   </head>
   <body>
@@ -129,6 +159,9 @@
         <div class="progress-text" id="msg">Iniciando...</div>
       </div>
       <div class="error" id="err"></div>
+      <div class="toolbar">
+        <button type="button" id="openLogBtn" title="Abrir setup.log en Notepad">Abrir setup.log</button>
+      </div>
       <div class="log-pane" id="log"></div>
     </div>
     <script>
@@ -143,13 +176,46 @@
       const msg = document.getElementById("msg");
       const err = document.getElementById("err");
       const log = document.getElementById("log");
+      const openLogBtn = document.getElementById("openLogBtn");
 
       const MAX_LOG_LINES = 1000;
 
+      function openLog() {
+        if (!window.__TAURI__) return;
+        window.__TAURI__.core.invoke("open_setup_log").catch((e) => {
+          console.error("open_setup_log failed:", e);
+        });
+      }
+
+      openLogBtn.addEventListener("click", openLog);
+
+      // Render an error message. If the message contains a Windows
+      // path (eg `C:\ProgramData\OctoPOS\setup.log`), turn it into a
+      // clickable link that opens the file in Notepad via the
+      // open_setup_log Tauri command. Pure text fallback otherwise.
       function showError(text) {
-        err.textContent = text;
         err.classList.add("visible");
         msg.textContent = "";
+        err.textContent = "";
+        const pathRegex = /([A-Za-z]:\\[^\s"<>]+\.log)/g;
+        let lastIndex = 0;
+        let match;
+        while ((match = pathRegex.exec(text)) !== null) {
+          if (match.index > lastIndex) {
+            err.appendChild(
+              document.createTextNode(text.slice(lastIndex, match.index)),
+            );
+          }
+          const link = document.createElement("a");
+          link.textContent = match[1];
+          link.addEventListener("click", openLog);
+          err.appendChild(link);
+          lastIndex = pathRegex.lastIndex;
+        }
+        if (lastIndex < text.length) {
+          err.appendChild(document.createTextNode(text.slice(lastIndex)));
+        }
+        if (lastIndex === 0) err.textContent = text;
       }
 
       function appendLog(stream, line) {

@@ -47,9 +47,33 @@ struct InstallState {
 fn main() {
     tauri::Builder::default()
         .manage(InstallState::default())
-        .invoke_handler(tauri::generate_handler![start_install])
+        .invoke_handler(tauri::generate_handler![start_install, open_setup_log])
         .run(tauri::generate_context!())
         .expect("error while running OctoPOS bootstrapper");
+}
+
+/// Lets the splash open `%ProgramData%\OctoPOS\setup.log` in the user's
+/// default editor (Notepad). The error banner has an "Abrir log" link
+/// that calls into this so the operator can read the transcript with
+/// one click instead of pasting the path into File Explorer.
+#[tauri::command]
+fn open_setup_log() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let path = setup_log_path();
+        if !path.exists() {
+            return Err(format!("{} no existe (todavia).", path.display()));
+        }
+        silent_command("notepad")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("notepad: {e}"))?;
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Solo Windows.".to_string())
+    }
 }
 
 /// JS fires this once when the window finishes painting. The pipeline
