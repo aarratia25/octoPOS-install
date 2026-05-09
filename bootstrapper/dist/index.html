@@ -100,35 +100,52 @@
       </div>
       <div class="error" id="err"></div>
     </div>
-    <script type="module">
-      const { listen } = window.__TAURI__.event;
-      const { invoke } = window.__TAURI__.core;
+    <script>
+      // Plain script (not type="module") so it runs synchronously while
+      // the body parses — by the time we reach this point the elements
+      // referenced by id are already in the DOM. ES modules are defer
+      // by default and run AFTER DOMContentLoaded, which made the old
+      // listener-based init never fire. Stick to a vanilla script and
+      // call invoke immediately; that pattern is what Tauri's own
+      // examples use.
       const fill = document.getElementById("fill");
       const msg = document.getElementById("msg");
       const err = document.getElementById("err");
 
-      listen("setup-progress", (event) => {
-        const { percent, message } = event.payload;
-        fill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
-        msg.textContent = message;
-      });
-
-      listen("setup-error", (event) => {
-        err.textContent = event.payload.message ?? "Error desconocido.";
+      function showError(text) {
+        err.textContent = text;
         err.classList.add("visible");
-      });
+        msg.textContent = "";
+      }
 
-      // Kick off the install pipeline as soon as the window finishes
-      // painting. The Rust side is idempotent — every step skips
-      // itself when the prerequisite is already present, so re-runs
-      // (and runs on machines that already have WSL/Docker) just
-      // breeze through the early steps in seconds.
-      window.addEventListener("DOMContentLoaded", () => {
-        invoke("start_install").catch((e) => {
-          err.textContent = String(e);
-          err.classList.add("visible");
+      // window.__TAURI__ requires withGlobalTauri: true in
+      // tauri.conf.json. Guard against the case where it isn't there
+      // so we surface a real error instead of a frozen "Iniciando...".
+      if (!window.__TAURI__) {
+        showError(
+          "El runtime de Tauri no esta disponible. Reinstala el bootstrapper.",
+        );
+      } else {
+        const { listen } = window.__TAURI__.event;
+        const { invoke } = window.__TAURI__.core;
+
+        listen("setup-progress", (event) => {
+          const { percent, message } = event.payload;
+          fill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+          msg.textContent = message;
         });
-      });
+
+        listen("setup-error", (event) => {
+          showError(event.payload.message ?? "Error desconocido.");
+        });
+
+        // Kick off the install pipeline immediately. Rust steps are
+        // idempotent so re-runs (or runs on machines that already
+        // have WSL/Docker) breeze through the early ones in seconds.
+        invoke("start_install").catch((e) => {
+          showError(String(e));
+        });
+      }
     </script>
   </body>
 </html>
