@@ -553,10 +553,38 @@ fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn register_companion_service(embedded: &std::path::Path) -> Result<(), String> {
-    let exe = embedded.join("octopos-updater.exe");
-    if !exe.exists() {
-        return Err(format!("octopos-updater.exe no encontrado en {exe:?}"));
+    let bundled = embedded.join("octopos-updater.exe");
+    if !bundled.exists() {
+        return Err(format!("octopos-updater.exe no encontrado en {bundled:?}"));
     }
+
+    // Copy the companion binary out of `C:\Program Files\OctoPOS Setup\
+    // embedded\` (managed by the bootstrapper's NSIS uninstaller) into a
+    // standalone location so the bootstrapper can self-uninstall later
+    // without taking the running service down with it. Without this
+    // copy, NSIS hits "Error abriendo archivo para escritura" the next
+    // time the user runs an updated bootstrapper because the old
+    // octopos-updater.exe is still being executed by the SCM from the
+    // exact path NSIS wants to overwrite.
+    let install_root = std::path::PathBuf::from(
+        std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string()),
+    )
+    .join("OctoPOS Updater");
+    std::fs::create_dir_all(&install_root)
+        .map_err(|e| format!("create_dir_all updater root: {e}"))?;
+    let exe = install_root.join("octopos-updater.exe");
+    // Stop+delete the service before swapping the file so we don't try
+    // to overwrite a binary the SCM is still running. Idempotent — if
+    // the service does not exist these calls are no-ops.
+    let _ = silent_command("sc")
+        .args(["stop", "OctoPOSUpdater"])
+        .status();
+    let _ = silent_command("sc")
+        .args(["delete", "OctoPOSUpdater"])
+        .status();
+    // Brief grace period for the SCM to release the binary handle.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::fs::copy(&bundled, &exe).map_err(|e| format!("copy updater binary: {e}"))?;
 
     let secret = generate_secret()?;
     let _ = silent_command("reg")

@@ -152,6 +152,19 @@ if ($killed -gt 0) {
     Skip 'Ninguno corriendo.'
 }
 
+Step 'Borrando C:\Program Files\OctoPOS Updater (binario del companion)...'
+$updaterRoot = Join-Path $env:ProgramFiles 'OctoPOS Updater'
+if (Test-Path $updaterRoot) {
+    Remove-Item $updaterRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $updaterRoot) {
+        Warn 'No pude borrar (handle del servicio?). Reinicia + reejecuta.'
+    } else {
+        Success 'Borrado.'
+    }
+} else {
+    Skip 'No existia.'
+}
+
 Step 'Borrando C:\ProgramData\OctoPOS (logs + secretos)...'
 if (Test-Path 'C:\ProgramData\OctoPOS') {
     # Retry con back-off: Windows tarda unos segundos en liberar
