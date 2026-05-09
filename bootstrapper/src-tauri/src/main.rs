@@ -218,6 +218,22 @@ fn run_silent_installer(
         return Err(format!("install-silent.ps1 no encontrado en {ps1:?}"));
     }
 
+    // Mirror stdout + stderr of the PowerShell child into a real log
+    // file so a failed install leaves something the operator (or us
+    // over support) can read, instead of an opaque "exit code 1" on
+    // the splash. The path is well-known — we surface it in the
+    // error message below so the user can paste the file contents.
+    let log_path = setup_log_path();
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("no pude abrir {log_path:?}: {e}"))?;
+
     // Tenant data (license key, branch, role) is captured by the
     // OctoPOS Admin's own activation screen the first time it
     // launches — the bootstrapper does not need any of that. We only
@@ -233,15 +249,38 @@ fn run_silent_installer(
             ps1.to_str().unwrap_or(""),
         ])
         .env("OCTOPOS_PLATFORM_URL", "https://platform.octo-pos.net")
+        .stdout(
+            log_file
+                .try_clone()
+                .map_err(|e| format!("clone stdout: {e}"))?,
+        )
+        .stderr(log_file)
         .status()
         .map_err(|e| format!("powershell spawn: {e}"))?;
 
     match status.code() {
         Some(0) => Ok(()),
         Some(3) => Err("__REBOOT_REQUIRED__".to_string()),
-        Some(c) => Err(format!("install-silent.ps1 fallo con codigo {c}")),
-        None => Err("install-silent.ps1 termino sin codigo de salida".to_string()),
+        Some(c) => Err(format!(
+            "install-silent.ps1 fallo con codigo {c}. Detalles en {}",
+            log_path.display()
+        )),
+        None => Err(format!(
+            "install-silent.ps1 termino sin codigo de salida. Detalles en {}",
+            log_path.display()
+        )),
     }
+}
+
+#[cfg(windows)]
+fn setup_log_path() -> std::path::PathBuf {
+    if let Some(programdata) = std::env::var_os("ProgramData") {
+        let mut p = std::path::PathBuf::from(programdata);
+        p.push("OctoPOS");
+        p.push("setup.log");
+        return p;
+    }
+    std::path::PathBuf::from(r"C:\ProgramData\OctoPOS\setup.log")
 }
 
 #[cfg(windows)]
