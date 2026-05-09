@@ -202,8 +202,13 @@ fn run_install(handle: &AppHandle) -> Result<(), String> {
     progress(handle, 94, "Configurando arranque automatico al boot...");
     let _ = register_wsl_autostart();
 
-    progress(handle, 98, "Creando acceso directo...");
-    create_desktop_shortcut().map_err(|e| e.to_string())?;
+    // Note: we do NOT create a desktop shortcut here. The admin .msi
+    // already creates one with the correct icon and target. Adding a
+    // second one from the bootstrapper led to a duplicate "OctoPOS
+    // Admin" entry on the desktop with the wrong target path
+    // (Cargo binary name `octopos-admin.exe` vs productName-based
+    // guess), and Windows showed "Missing Shortcut" when the user
+    // clicked it. Trust the MSI installer to own its own shortcut.
 
     progress(handle, 100, "Listo. OctoPOS esta instalado.");
     std::thread::sleep(std::time::Duration::from_secs(2));
@@ -612,29 +617,52 @@ fn generate_secret() -> Result<String, String> {
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// Resolves where the OctoPOS Admin binary actually lives. Tauri's
+/// MSI installs in `Program Files\<productName>\` (productName is
+/// "OctoPOS Admin", from tauri.conf.json), but the executable inside
+/// is named after the **Cargo package name** (`octopos-admin.exe`),
+/// not the productName. Earlier versions of this bootstrapper hard-
+/// coded `OctoPOS Admin.exe`, which doesn't exist, so launching at
+/// the end of the install raised "Windows cannot find ..." and the
+/// operator was left with the admin installed but no entry point.
+///
+/// We probe a small list of candidates so a future rename of the
+/// Cargo binary (or the productName) doesn't silently break this
+/// code path again. First match wins.
 #[cfg(windows)]
-fn create_desktop_shortcut() -> Result<(), String> {
-    let ps = r#"
-$WshShell = New-Object -ComObject WScript.Shell
-$desktop = [Environment]::GetFolderPath('Desktop')
-$shortcut = $WshShell.CreateShortcut("$desktop\OctoPOS Admin.lnk")
-$shortcut.TargetPath = "$env:ProgramFiles\OctoPOS Admin\OctoPOS Admin.exe"
-$shortcut.Save()
-"#;
-    let _ = silent_command("powershell")
-        .args(["-NoProfile", "-Command", ps])
-        .status();
-    Ok(())
+fn admin_exe_path() -> std::path::PathBuf {
+    let program_files = std::env::var("ProgramFiles")
+        .unwrap_or_else(|_| r"C:\Program Files".to_string());
+    let install_dir = std::path::PathBuf::from(&program_files).join("OctoPOS Admin");
+    let candidates = [
+        "octopos-admin.exe", // current — Cargo `[package] name`
+        "OctoPOS Admin.exe", // legacy — productName-based fallback
+    ];
+    for c in &candidates {
+        let p = install_dir.join(c);
+        if p.exists() {
+            return p;
+        }
+    }
+    install_dir.join(candidates[0])
 }
 
 #[cfg(windows)]
 fn launch_admin() -> Result<(), String> {
-    let target = std::env::var("ProgramFiles")
-        .map(|p| format!(r"{p}\OctoPOS Admin\OctoPOS Admin.exe"))
-        .unwrap_or_else(|_| r"C:\Program Files\OctoPOS Admin\OctoPOS Admin.exe".to_string());
-    let _ = silent_command("cmd")
-        .args(["/c", "start", "", &target])
-        .status();
+    let exe = admin_exe_path();
+    if !exe.exists() {
+        return Err(format!(
+            "El admin no se encontro en {}. La instalacion del .msi quizas fallo en silencio.",
+            exe.display()
+        ));
+    }
+    // Spawn the admin directly (no `cmd /c start` shenanigans —
+    // those briefly flash a console and confuse Windows when the
+    // path doesn't resolve). silent_command keeps the inheritance
+    // policy consistent with the rest of the pipeline.
+    silent_command(exe.to_str().unwrap_or(""))
+        .spawn()
+        .map_err(|e| format!("no pude lanzar el admin: {e}"))?;
     Ok(())
 }
 

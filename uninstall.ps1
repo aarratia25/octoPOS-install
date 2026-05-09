@@ -89,15 +89,23 @@ if ($setupEntries) {
     Skip 'No quedo residual (auto-uninstall hizo su trabajo).'
 }
 
-Step 'Borrando shortcut del escritorio...'
+Step 'Borrando shortcuts del escritorio...'
 $desktop = [Environment]::GetFolderPath('Desktop')
-$shortcut = Join-Path $desktop 'OctoPOS Admin.lnk'
-if (Test-Path $shortcut) {
-    Remove-Item $shortcut -Force
-    Success 'Shortcut borrado.'
-} else {
-    Skip 'No existia.'
+$publicDesktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+$removed = 0
+foreach ($base in @($desktop, $publicDesktop)) {
+    foreach ($name in @('OctoPOS Admin.lnk', 'OctoPOS Setup.lnk')) {
+        $path = Join-Path $base $name
+        if (Test-Path $path) {
+            Remove-Item $path -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path $path)) {
+                Write-Host "    borrado: $path" -ForegroundColor Green
+                $removed++
+            }
+        }
+    }
 }
+if ($removed -eq 0) { Skip 'Ninguno encontrado.' }
 
 Step 'Borrando registro HKLM\Software\OctoPOS...'
 if (Test-Path 'HKLM:\Software\OctoPOS') {
