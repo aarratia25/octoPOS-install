@@ -16,6 +16,12 @@ services:
     image: mongo:7
     container_name: octopos-mongodb
     restart: unless-stopped
+    # autoheal label tells the autoheal sidecar (below) to kill this
+    # container when Docker reports it as unhealthy. `restart:
+    # unless-stopped` only acts on exits — for hangs that keep the
+    # process alive but unresponsive, we need an external watcher.
+    labels:
+      - autoheal=true
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-octopos}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-ChangeMe}
@@ -38,6 +44,8 @@ services:
     image: ${OCTOPOS_API_IMAGE:-ghcr.io/aarratia25/octopos-admin-api}:${OCTOPOS_API_VERSION:-latest}
     container_name: octopos-api
     restart: unless-stopped
+    labels:
+      - autoheal=true
     # `service_healthy` makes the API wait for Mongo's healthcheck instead
     # of just for its container to start. Without this the API can boot
     # against a Mongo that is still loading auth data and the very first
@@ -89,6 +97,25 @@ services:
       timeout: 3s
       retries: 5
       start_period: 30s
+
+  # Autoheal sidecar — watches the Docker socket and kills any
+  # container labelled `autoheal=true` that Docker reports as
+  # `unhealthy`. Once the container exits, `restart: unless-stopped`
+  # brings it back automatically. Without this, a process that hangs
+  # (deadlock, stuck I/O, lazy GC) but does not crash stays
+  # `unhealthy` forever and Docker Compose alone never reacts.
+  # Tiny container (~5 MB RAM); the only privilege it needs is the
+  # docker.sock read-write mount below.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: octopos-autoheal
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 30
+      AUTOHEAL_START_PERIOD: 60
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   mongo_data:

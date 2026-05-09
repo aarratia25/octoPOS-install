@@ -115,8 +115,11 @@ fn run_install(handle: &AppHandle) -> Result<(), String> {
     progress(handle, 85, "Descargando e instalando el panel...");
     install_admin_msi(&embedded).map_err(|e| e.to_string())?;
 
-    progress(handle, 92, "Registrando servicio de actualizaciones...");
+    progress(handle, 90, "Registrando servicio de actualizaciones...");
     register_companion_service(&embedded).map_err(|e| e.to_string())?;
+
+    progress(handle, 94, "Configurando arranque automatico al boot...");
+    let _ = register_wsl_autostart();
 
     progress(handle, 98, "Creando acceso directo...");
     create_desktop_shortcut().map_err(|e| e.to_string())?;
@@ -456,6 +459,47 @@ fn launch_admin() -> Result<(), String> {
     let _ = Command::new("cmd")
         .args(["/c", "start", "", &target])
         .status();
+    Ok(())
+}
+
+#[cfg(windows)]
+fn register_wsl_autostart() -> Result<(), String> {
+    use std::process::Command;
+
+    // Register a Windows Scheduled Task that fires "at startup" (no
+    // interactive login required) and runs `wsl --exec /bin/true`.
+    // That single call wakes the Ubuntu distro in the background,
+    // which in turn boots systemd, which in turn starts dockerd and
+    // every container with `restart: unless-stopped`. Without this
+    // task, the API only comes back when an operator opens a WSL
+    // shell — defeating the whole point of unattended recovery.
+    //
+    // Run as SYSTEM with HIGHEST privileges so the task survives
+    // user account changes and does not pop UAC. /f overwrites any
+    // pre-existing task with the same name (idempotent re-runs).
+    let status = Command::new("schtasks")
+        .args([
+            "/create",
+            "/tn",
+            "OctoPOS WSL Autostart",
+            "/tr",
+            "wsl -d Ubuntu-22.04 --exec /bin/true",
+            "/sc",
+            "onstart",
+            "/ru",
+            "SYSTEM",
+            "/rl",
+            "HIGHEST",
+            "/f",
+        ])
+        .status()
+        .map_err(|e| format!("schtasks spawn: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "schtasks /create fallo con codigo {}",
+            status.code().unwrap_or(-1)
+        ));
+    }
     Ok(())
 }
 

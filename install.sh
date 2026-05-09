@@ -30,15 +30,30 @@ if command -v docker >/dev/null 2>&1; then
 else
   step 'Instalando Docker Engine...'
   curl -fsSL https://get.docker.com | sh
-  if [[ -f /etc/wsl.conf ]] && ! grep -q '^\[boot\]' /etc/wsl.conf; then
-    printf '\n[boot]\nsystemd=true\n' >> /etc/wsl.conf
-    warn 'Habilité systemd en /etc/wsl.conf — corré `wsl --shutdown` en Windows para aplicar.'
-  elif [[ ! -f /etc/wsl.conf ]]; then
-    printf '[boot]\nsystemd=true\n' > /etc/wsl.conf
-    warn 'Creé /etc/wsl.conf con systemd habilitado — corré `wsl --shutdown` en Windows.'
-  fi
-  service docker start || true
   ok "Docker instalado: $(docker --version)"
+fi
+
+# Enable systemd inside the WSL distro and persist Docker as a managed
+# service. Without this:
+#   - dockerd does not start automatically when the distro boots
+#   - the only way to bring it up is `service docker start` from a
+#     login shell, which never happens on a headless reboot
+# We run the block whether Docker was installed fresh or already
+# present so an existing Docker that was started ad-hoc (via
+# `service docker start` in a previous session) gets promoted to a
+# real systemd unit going forward. Idempotent on every re-execution.
+if ! grep -q '^\[boot\]' /etc/wsl.conf 2>/dev/null; then
+  step 'Habilitando systemd en /etc/wsl.conf...'
+  printf '\n[boot]\nsystemd=true\n' >> /etc/wsl.conf
+  warn 'systemd habilitado — la próxima vez que reinicies Windows entra en efecto.'
+fi
+if pidof systemd >/dev/null 2>&1; then
+  step 'Habilitando docker en el arranque (systemctl enable)...'
+  systemctl enable --now docker.service containerd.service 2>/dev/null || true
+  ok 'Docker quedará vivo entre reboots vía systemd.'
+else
+  warn 'systemd aún no está activo en esta distro — `wsl --shutdown` desde Windows + relanzar para que tome efecto.'
+  service docker start || true
 fi
 
 if ! docker compose version >/dev/null 2>&1; then
