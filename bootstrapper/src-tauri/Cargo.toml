@@ -24,3 +24,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 log = "0.4"
+# getrandom backs onto BCryptGenRandom on Windows. The previous
+# implementation tried to `File::open("\\Device\\KsecDD")` which is
+# not a real file path; it failed with "The handle is invalid (os
+# error 6)" and broke `register_companion_service`. getrandom is a
+# tiny, well-maintained crate (used by `rand`, `uuid`, etc.) so the
+# dependency cost is negligible.
+getrandom = "0.2"

@@ -605,13 +605,10 @@ fn register_companion_service(embedded: &std::path::Path) -> Result<(), String> 
 
 #[cfg(windows)]
 fn generate_secret() -> Result<String, String> {
-    use std::io::Read;
+    // BCryptGenRandom under the hood — works in any process state
+    // (admin or not), no special handles, no /dev/urandom dance.
     let mut buf = [0u8; 32];
-    use std::fs::File;
-    let mut f = File::open("\\Device\\KsecDD")
-        .or_else(|_| File::open("CONIN$"))
-        .map_err(|e| format!("open rng: {e}"))?;
-    f.read_exact(&mut buf).map_err(|e| format!("read rng: {e}"))?;
+    getrandom::getrandom(&mut buf).map_err(|e| format!("getrandom: {e}"))?;
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
