@@ -29,6 +29,13 @@ struct ErrorEvent {
     message: String,
 }
 
+#[allow(dead_code)] // Only constructed under cfg(windows); silences the lint on Linux/CI checks.
+#[derive(Clone, Serialize)]
+struct LogLineEvent {
+    stream: &'static str,
+    line: String,
+}
+
 /// Guards the install pipeline from being started twice (e.g. impatient
 /// double click on the submit button) — the form keeps Submit disabled
 /// while we run, so this is belt-and-suspenders.
@@ -99,7 +106,7 @@ fn run_install(handle: &AppHandle) -> Result<(), String> {
         progress(handle, 25, "Configurando reanudacion despues del reboot...");
         register_runonce(&resource_dir).map_err(|e| e.to_string())?;
         progress(handle, 30, "Reiniciando equipo...");
-        std::process::Command::new("shutdown")
+        silent_command("shutdown")
             .args(["/r", "/t", "5"])
             .status()
             .map_err(|e| format!("shutdown: {e}"))?;
@@ -159,11 +166,100 @@ fn progress(handle: &AppHandle, percent: u8, message: &str) {
 
 // --- Windows-only helpers -------------------------------------------------
 
+// CREATE_NO_WINDOW prevents Windows from spawning a console window for
+// every CLI child the bootstrapper invokes (powershell, wsl, curl,
+// schtasks, sc, msiexec, reg). Without it, each of those flashes a
+// console behind the splash, which (a) looks unprofessional and
+// (b) confused users who closed them and broke the pipeline.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
+fn silent_command(program: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = std::process::Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// Runs a command, captures stdout + stderr line-by-line and:
+///   1. Emits each line as a `setup-log` Tauri event so the splash
+///      can render a live console panel.
+///   2. Appends each line to %ProgramData%\OctoPOS\setup.log so the
+///      operator (and remote support) can read the full transcript
+///      after the fact, even if the splash window is gone.
+///
+/// Returns the child's exit code on completion. Errors out if we
+/// cannot spawn or pipe; the caller decides how to interpret a
+/// non-zero exit.
+#[cfg(windows)]
+fn run_streaming(
+    handle: &AppHandle,
+    mut cmd: std::process::Command,
+) -> Result<std::process::ExitStatus, String> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::Stdio;
+    use std::thread;
+
+    let log_path = setup_log_path();
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("no pude abrir {log_path:?}: {e}"))?;
+
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("spawn: {e}"))?;
+
+    let stdout = child.stdout.take().ok_or("missing stdout pipe")?;
+    let stderr = child.stderr.take().ok_or("missing stderr pipe")?;
+
+    fn pump<R: std::io::Read + Send + 'static>(
+        reader: R,
+        stream: &'static str,
+        handle: AppHandle,
+        mut sink: std::fs::File,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let buf = BufReader::new(reader);
+            for line in buf.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => break,
+                };
+                let _ = writeln!(sink, "[{stream}] {line}");
+                let _ = handle.emit(
+                    "setup-log",
+                    LogLineEvent {
+                        stream,
+                        line,
+                    },
+                );
+            }
+        })
+    }
+
+    let log_for_out = log_file
+        .try_clone()
+        .map_err(|e| format!("clone log: {e}"))?;
+    let log_for_err = log_file;
+    let h_out = handle.clone();
+    let h_err = handle.clone();
+    let t_out = pump(stdout, "stdout", h_out, log_for_out);
+    let t_err = pump(stderr, "stderr", h_err, log_for_err);
+
+    let status = child.wait().map_err(|e| format!("wait: {e}"))?;
+    let _ = t_out.join();
+    let _ = t_err.join();
+    Ok(status)
+}
+
 #[cfg(windows)]
 fn pre_check_system() -> Result<(), String> {
-    use std::process::Command;
-
-    let out = Command::new("cmd")
+    let out = silent_command("cmd")
         .args(["/c", "ver"])
         .output()
         .map_err(|e| format!("ver: {e}"))?;
@@ -183,18 +279,16 @@ fn pre_check_system() -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn ensure_wsl(_handle: &AppHandle) -> Result<bool, String> {
-    use std::process::Command;
-    let wsl_present = Command::new("where")
+fn ensure_wsl(handle: &AppHandle) -> Result<bool, String> {
+    let wsl_present = silent_command("where")
         .arg("wsl")
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
     if !wsl_present {
-        let status = Command::new("wsl")
-            .args(["--install", "--no-distribution"])
-            .status()
-            .map_err(|e| format!("wsl --install: {e}"))?;
+        let mut cmd = silent_command("wsl");
+        cmd.args(["--install", "--no-distribution"]);
+        let status = run_streaming(handle, cmd)?;
         if !status.success() {
             return Err(format!(
                 "wsl --install fallo con codigo {}",
@@ -208,31 +302,13 @@ fn ensure_wsl(_handle: &AppHandle) -> Result<bool, String> {
 
 #[cfg(windows)]
 fn run_silent_installer(
-    _handle: &AppHandle,
+    handle: &AppHandle,
     embedded: &std::path::Path,
 ) -> Result<(), String> {
-    use std::process::Command;
-
     let ps1 = embedded.join("install-silent.ps1");
     if !ps1.exists() {
         return Err(format!("install-silent.ps1 no encontrado en {ps1:?}"));
     }
-
-    // Mirror stdout + stderr of the PowerShell child into a real log
-    // file so a failed install leaves something the operator (or us
-    // over support) can read, instead of an opaque "exit code 1" on
-    // the splash. The path is well-known — we surface it in the
-    // error message below so the user can paste the file contents.
-    let log_path = setup_log_path();
-    if let Some(parent) = log_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|e| format!("no pude abrir {log_path:?}: {e}"))?;
 
     // Tenant data (license key, branch, role) is captured by the
     // OctoPOS Admin's own activation screen the first time it
@@ -240,23 +316,18 @@ fn run_silent_installer(
     // pass machine-local secrets that the script auto-generates if
     // empty (Mongo password, JWT secret) and the canonical platform
     // URL so the API can phone home once the operator activates.
-    let status = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            ps1.to_str().unwrap_or(""),
-        ])
-        .env("OCTOPOS_PLATFORM_URL", "https://platform.octo-pos.net")
-        .stdout(
-            log_file
-                .try_clone()
-                .map_err(|e| format!("clone stdout: {e}"))?,
-        )
-        .stderr(log_file)
-        .status()
-        .map_err(|e| format!("powershell spawn: {e}"))?;
+    let mut cmd = silent_command("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ps1.to_str().unwrap_or(""),
+    ])
+    .env("OCTOPOS_PLATFORM_URL", "https://platform.octo-pos.net");
+
+    let log_path = setup_log_path();
+    let status = run_streaming(handle, cmd)?;
 
     match status.code() {
         Some(0) => Ok(()),
@@ -285,12 +356,11 @@ fn setup_log_path() -> std::path::PathBuf {
 
 #[cfg(windows)]
 fn wait_for_api_health(handle: &AppHandle) -> Result<(), String> {
-    use std::process::Command;
     use std::time::{Duration, Instant};
 
     let deadline = Instant::now() + Duration::from_secs(180);
     while Instant::now() < deadline {
-        let out = Command::new("curl")
+        let out = silent_command("curl")
             .args(["-fsS", "http://localhost:3000/"])
             .output();
         if let Ok(o) = out {
@@ -307,7 +377,6 @@ fn wait_for_api_health(handle: &AppHandle) -> Result<(), String> {
 
 #[cfg(windows)]
 fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
-    use std::process::Command;
 
     // Pull metadata for the latest published admin release from the
     // public mirror repo. We hit the GitHub REST API with curl
@@ -318,7 +387,7 @@ fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
     // OctoPOS-Setup.exe still installs whatever the latest release
     // says is current.
     let api_url = "https://api.github.com/repos/aarratia25/octoPOS-releases/releases/latest";
-    let metadata_out = Command::new("curl")
+    let metadata_out = silent_command("curl")
         .args([
             "-fsSL",
             "-H",
@@ -362,7 +431,7 @@ fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
     let temp_dir = std::env::temp_dir();
     let temp_msi = temp_dir.join(msi_name);
 
-    let download_status = Command::new("curl")
+    let download_status = silent_command("curl")
         .args([
             "-fsSL",
             "-H",
@@ -380,7 +449,7 @@ fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
         ));
     }
 
-    let install_status = Command::new("msiexec")
+    let install_status = silent_command("msiexec")
         .args([
             "/i",
             temp_msi.to_str().unwrap_or(""),
@@ -405,14 +474,13 @@ fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn register_companion_service(embedded: &std::path::Path) -> Result<(), String> {
-    use std::process::Command;
     let exe = embedded.join("octopos-updater.exe");
     if !exe.exists() {
         return Err(format!("octopos-updater.exe no encontrado en {exe:?}"));
     }
 
     let secret = generate_secret()?;
-    let _ = Command::new("reg")
+    let _ = silent_command("reg")
         .args([
             "add",
             r"HKLM\Software\OctoPOS",
@@ -435,7 +503,7 @@ fn register_companion_service(embedded: &std::path::Path) -> Result<(), String> 
         std::fs::write(&p, &secret).map_err(|e| format!("write secret: {e}"))?;
     }
 
-    let create = Command::new("sc")
+    let create = silent_command("sc")
         .args([
             "create",
             "OctoPOSUpdater",
@@ -455,7 +523,7 @@ fn register_companion_service(embedded: &std::path::Path) -> Result<(), String> 
             ));
         }
     }
-    let _ = Command::new("sc")
+    let _ = silent_command("sc")
         .args(["start", "OctoPOSUpdater"])
         .status();
     Ok(())
@@ -475,7 +543,6 @@ fn generate_secret() -> Result<String, String> {
 
 #[cfg(windows)]
 fn create_desktop_shortcut() -> Result<(), String> {
-    use std::process::Command;
     let ps = r#"
 $WshShell = New-Object -ComObject WScript.Shell
 $desktop = [Environment]::GetFolderPath('Desktop')
@@ -483,7 +550,7 @@ $shortcut = $WshShell.CreateShortcut("$desktop\OctoPOS Admin.lnk")
 $shortcut.TargetPath = "$env:ProgramFiles\OctoPOS Admin\OctoPOS Admin.exe"
 $shortcut.Save()
 "#;
-    let _ = Command::new("powershell")
+    let _ = silent_command("powershell")
         .args(["-NoProfile", "-Command", ps])
         .status();
     Ok(())
@@ -491,11 +558,10 @@ $shortcut.Save()
 
 #[cfg(windows)]
 fn launch_admin() -> Result<(), String> {
-    use std::process::Command;
     let target = std::env::var("ProgramFiles")
         .map(|p| format!(r"{p}\OctoPOS Admin\OctoPOS Admin.exe"))
         .unwrap_or_else(|_| r"C:\Program Files\OctoPOS Admin\OctoPOS Admin.exe".to_string());
-    let _ = Command::new("cmd")
+    let _ = silent_command("cmd")
         .args(["/c", "start", "", &target])
         .status();
     Ok(())
@@ -503,7 +569,6 @@ fn launch_admin() -> Result<(), String> {
 
 #[cfg(windows)]
 fn register_wsl_autostart() -> Result<(), String> {
-    use std::process::Command;
 
     // Register a Windows Scheduled Task that fires "at startup" (no
     // interactive login required) and runs `wsl --exec /bin/true`.
@@ -516,7 +581,7 @@ fn register_wsl_autostart() -> Result<(), String> {
     // Run as SYSTEM with HIGHEST privileges so the task survives
     // user account changes and does not pop UAC. /f overwrites any
     // pre-existing task with the same name (idempotent re-runs).
-    let status = Command::new("schtasks")
+    let status = silent_command("schtasks")
         .args([
             "/create",
             "/tn",
@@ -545,7 +610,6 @@ fn register_wsl_autostart() -> Result<(), String> {
 #[cfg(windows)]
 fn schedule_self_uninstall() -> Result<(), String> {
     use std::io::Write;
-    use std::process::Command;
 
     // Write a tiny .bat to %TEMP% that:
     //   1. Waits ~5s so the bootstrapper process can fully exit
@@ -572,7 +636,7 @@ del /f /q "%~f0"
         .map_err(|e| format!("write cleanup bat: {e}"))?;
     drop(f);
 
-    Command::new("cmd")
+    silent_command("cmd")
         .args([
             "/c",
             "start",
@@ -587,10 +651,9 @@ del /f /q "%~f0"
 
 #[cfg(windows)]
 fn register_runonce(_resource_dir: &std::path::Path) -> Result<(), String> {
-    use std::process::Command;
     let exe_path = std::env::current_exe()
         .map_err(|e| format!("current_exe: {e}"))?;
-    let status = Command::new("reg")
+    let status = silent_command("reg")
         .args([
             "add",
             r"HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce",
