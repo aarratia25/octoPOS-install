@@ -169,9 +169,33 @@ if (Test-Path 'C:\ProgramData\OctoPOS') {
     if ($deleted) {
         Success 'Borrado.'
     } else {
-        Warn 'Algunos archivos no se pudieron borrar despues de 10s de retry.'
-        Warn 'Probablemente el OctoPOSUpdater todavia tiene un handle abierto.'
-        Warn 'Reiniciar Windows y reejecutar este script lo resuelve.'
+        # Last-resort: schedule a delete on next boot via MoveFileEx
+        # with MOVEFILE_DELAY_UNTIL_REBOOT (flag = 4). Windows replays
+        # these pending operations during the next session manager
+        # init, before any user can grab a handle on the targets.
+        Warn 'Handles abiertos despues de 10s. Encolando borrado para el proximo boot...'
+        try {
+            Add-Type -ErrorAction SilentlyContinue -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class OctoFileOps {
+    [DllImport("kernel32.dll", CharSet=CharSet.Auto, SetLastError=true)]
+    public static extern bool MoveFileEx(string existing, string replacement, int flags);
+}
+'@
+            $queued = 0
+            # Walk children-first so the parent dir can be queued last.
+            Get-ChildItem 'C:\ProgramData\OctoPOS' -Recurse -Force -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending |
+                ForEach-Object {
+                    if ([OctoFileOps]::MoveFileEx($_.FullName, $null, 4)) { $queued++ }
+                }
+            if ([OctoFileOps]::MoveFileEx('C:\ProgramData\OctoPOS', $null, 4)) { $queued++ }
+            Warn "$queued entradas encoladas para borrar al proximo reboot."
+            Warn 'Reinicia Windows cuando puedas y la limpieza se completa sola.'
+        } catch {
+            Warn 'No pude encolar el borrado diferido. Reiniciar Windows + reejecutar.'
+        }
     }
 } else {
     Skip 'No existia.'
