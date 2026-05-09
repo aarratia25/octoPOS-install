@@ -1,6 +1,6 @@
 [package]
 name = "octopos-bootstrapper"
-version = "0.0.0"
+version = "0.3.10"
 description = "OctoPOS one-click installer (WSL2 + Docker + Mongo + API + admin)"
 authors = ["nonlyweb"]
 edition = "2021"

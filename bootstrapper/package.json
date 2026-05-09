@@ -1,7 +1,7 @@
 {
   "name": "octopos-bootstrapper",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.3.10",
   "scripts": {
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
