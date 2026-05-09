@@ -6,173 +6,279 @@
     <title>OctoPOS Setup</title>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      :root {
+        --bg-1: #0b1220;
+        --bg-2: #131b2e;
+        --bg-card: rgba(255, 255, 255, 0.03);
+        --border: rgba(148, 163, 184, 0.12);
+        --border-strong: rgba(148, 163, 184, 0.25);
+        --text: #f1f5f9;
+        --text-dim: #94a3b8;
+        --text-muted: #64748b;
+        --accent: #10b981;
+        --accent-glow: rgba(16, 185, 129, 0.45);
+        --danger: #ef4444;
+        --danger-bg: rgba(239, 68, 68, 0.12);
+      }
+
       html, body {
         height: 100%;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        color: #f8fafc;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable",
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        background:
+          radial-gradient(1200px 800px at 100% 0%, rgba(16, 185, 129, 0.08), transparent 60%),
+          radial-gradient(900px 600px at 0% 100%, rgba(56, 189, 248, 0.06), transparent 60%),
+          linear-gradient(160deg, var(--bg-1), var(--bg-2));
+        color: var(--text);
         overflow: hidden;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
       }
+
       .root {
         height: 100%;
         display: flex;
         flex-direction: column;
-        align-items: center;
-        padding: 24px;
-        gap: 16px;
+        padding: 28px 32px 24px;
+        gap: 18px;
         overflow: hidden;
       }
+
       .header {
         display: flex;
-        flex-direction: column;
         align-items: center;
-        gap: 12px;
+        gap: 18px;
         flex-shrink: 0;
       }
       .logo {
-        width: 64px;
-        height: 64px;
-        border-radius: 16px;
-        background: #10b981;
+        width: 56px;
+        height: 56px;
+        border-radius: 14px;
+        background: linear-gradient(135deg, #10b981, #059669);
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 36px;
+        font-size: 30px;
         font-weight: 700;
-        color: #0f172a;
-        letter-spacing: -2px;
+        color: #04241a;
+        letter-spacing: -1.5px;
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.06) inset,
+          0 8px 24px var(--accent-glow);
+        position: relative;
+      }
+      .logo::after {
+        content: "";
+        position: absolute;
+        inset: -3px;
+        border-radius: 17px;
+        background: radial-gradient(closest-side, var(--accent-glow), transparent 70%);
+        z-index: -1;
+        opacity: 0.7;
+        animation: pulse 2.4s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 0.5; transform: scale(1); }
+        50%      { opacity: 0.85; transform: scale(1.06); }
+      }
+
+      .header-text {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
       }
       .title {
         font-size: 18px;
         font-weight: 600;
+        letter-spacing: -0.3px;
       }
       .subtitle {
-        font-size: 13px;
-        color: #94a3b8;
-        text-align: center;
-        max-width: 480px;
+        font-size: 12.5px;
+        color: var(--text-dim);
+        line-height: 1.45;
       }
-      .progress-wrap {
-        width: 100%;
-        max-width: 480px;
+
+      .progress-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
         flex-shrink: 0;
+      }
+      .progress-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .progress-step {
+        font-size: 13px;
+        color: var(--text);
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .progress-percent {
+        font-size: 12px;
+        color: var(--text-dim);
+        font-variant-numeric: tabular-nums;
+        font-weight: 500;
+        letter-spacing: 0.3px;
       }
       .progress-bar {
         height: 6px;
-        background: rgba(148, 163, 184, 0.2);
+        background: rgba(148, 163, 184, 0.15);
         border-radius: 999px;
         overflow: hidden;
+        position: relative;
       }
       .progress-fill {
         height: 100%;
-        background: #10b981;
+        background: linear-gradient(90deg, #10b981, #34d399);
         width: 0%;
-        transition: width 300ms ease;
+        transition: width 320ms cubic-bezier(0.4, 0, 0.2, 1);
         border-radius: 999px;
+        box-shadow: 0 0 12px var(--accent-glow);
       }
-      .progress-text {
-        margin-top: 8px;
-        font-size: 13px;
-        color: #cbd5e1;
-        text-align: center;
-        min-height: 18px;
-      }
-      .log-pane {
-        width: 100%;
-        flex: 1;
-        min-height: 120px;
-        max-height: 100%;
-        background: #020617;
-        border: 1px solid rgba(148, 163, 184, 0.15);
-        border-radius: 8px;
-        padding: 12px;
-        font-family: "Consolas", "Cascadia Code", "Courier New", monospace;
-        font-size: 11px;
-        line-height: 1.5;
-        color: #cbd5e1;
-        overflow-y: auto;
-        white-space: pre-wrap;
-        word-break: break-all;
-      }
-      .log-pane .line { display: block; }
-      .log-pane .stderr { color: #fca5a5; }
-      .log-pane .meta { color: #64748b; }
+
       .error {
-        padding: 10px 14px;
-        background: rgba(239, 68, 68, 0.15);
+        padding: 12px 14px;
+        background: var(--danger-bg);
         border: 1px solid rgba(239, 68, 68, 0.4);
+        border-left: 3px solid var(--danger);
         border-radius: 8px;
         color: #fca5a5;
         font-size: 13px;
-        max-width: 600px;
-        text-align: center;
+        line-height: 1.5;
         display: none;
         flex-shrink: 0;
       }
       .error.visible { display: block; }
-      .error a, .open-log-btn {
-        color: #fca5a5;
+      .error a {
+        color: #fee2e2;
         text-decoration: underline;
         cursor: pointer;
-        background: none;
-        border: none;
-        font: inherit;
-        padding: 0;
+        font-weight: 500;
       }
-      .error a:hover, .open-log-btn:hover { color: #fecaca; }
+      .error a:hover { color: #ffffff; }
+
       .toolbar {
         display: flex;
         gap: 8px;
-        font-size: 11px;
-        color: #64748b;
+        align-items: center;
         flex-shrink: 0;
       }
+      .toolbar .label {
+        font-size: 11px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        font-weight: 600;
+        flex: 1;
+      }
       .toolbar button {
-        background: rgba(148, 163, 184, 0.1);
-        border: 1px solid rgba(148, 163, 184, 0.2);
-        color: #cbd5e1;
-        padding: 4px 10px;
-        border-radius: 4px;
+        background: transparent;
+        border: 1px solid var(--border-strong);
+        color: var(--text-dim);
+        padding: 6px 12px;
+        border-radius: 6px;
         cursor: pointer;
         font: inherit;
+        font-size: 12px;
+        transition: all 150ms ease;
       }
       .toolbar button:hover {
-        background: rgba(148, 163, 184, 0.2);
-        color: #f8fafc;
+        background: rgba(148, 163, 184, 0.08);
+        color: var(--text);
+        border-color: var(--text-dim);
       }
+
+      .log-pane {
+        flex: 1;
+        min-height: 0;
+        background: rgba(2, 6, 23, 0.6);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px 14px;
+        font-family:
+          "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas,
+          "Liberation Mono", Menlo, monospace;
+        font-size: 11.5px;
+        line-height: 1.55;
+        color: var(--text);
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+      }
+      .log-pane::-webkit-scrollbar { width: 8px; }
+      .log-pane::-webkit-scrollbar-track { background: transparent; }
+      .log-pane::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.2);
+        border-radius: 4px;
+      }
+      .log-pane::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.35); }
+
+      .log-pane .line { display: block; }
+      /* stderr is dimmer (not red) — many CLIs (docker pull, npm
+         install) write progress to stderr; that's not an error. */
+      .log-pane .stderr { color: var(--text-dim); }
+      .log-pane .meta {
+        color: var(--accent);
+        font-style: normal;
+        opacity: 0.8;
+      }
+      .log-pane .meta .time { color: var(--text-muted); margin-right: 6px; }
     </style>
   </head>
   <body>
     <div class="root">
       <div class="header">
         <div class="logo">O</div>
-        <div class="title">Instalando OctoPOS</div>
-        <div class="subtitle">
-          Esto puede tardar entre 5 y 15 minutos la primera vez.
-          No cierres esta ventana — al terminar, el panel se abre solo.
+        <div class="header-text">
+          <div class="title">Instalando OctoPOS</div>
+          <div class="subtitle">
+            Esto puede tardar entre 5 y 15 minutos la primera vez.
+            No cierres esta ventana — al terminar, el panel se abre solo.
+          </div>
         </div>
       </div>
-      <div class="progress-wrap">
+
+      <div class="progress-card">
+        <div class="progress-row">
+          <div class="progress-step" id="msg">Iniciando...</div>
+          <div class="progress-percent" id="pct">0%</div>
+        </div>
         <div class="progress-bar">
           <div class="progress-fill" id="fill"></div>
         </div>
-        <div class="progress-text" id="msg">Iniciando...</div>
       </div>
+
       <div class="error" id="err"></div>
+
       <div class="toolbar">
+        <span class="label">Registro detallado</span>
         <button type="button" id="openLogBtn" title="Abrir setup.log en Notepad">Abrir setup.log</button>
       </div>
+
       <div class="log-pane" id="log"></div>
     </div>
+
     <script>
       // Plain script (not type="module") so it runs synchronously while
       // the body parses — by the time we reach this point the elements
       // referenced by id are already in the DOM. ES modules are defer
       // by default and run AFTER DOMContentLoaded, which made the old
-      // listener-based init never fire. Stick to a vanilla script and
-      // call invoke immediately; that pattern is what Tauri's own
-      // examples use.
+      // listener-based init never fire.
       const fill = document.getElementById("fill");
+      const pct = document.getElementById("pct");
       const msg = document.getElementById("msg");
       const err = document.getElementById("err");
       const log = document.getElementById("log");
@@ -186,25 +292,21 @@
           console.error("open_setup_log failed:", e);
         });
       }
-
       openLogBtn.addEventListener("click", openLog);
 
-      // Render an error message. If the message contains a Windows
-      // path (eg `C:\ProgramData\OctoPOS\setup.log`), turn it into a
+      // Render an error message. If it contains a Windows path
+      // (eg `C:\ProgramData\OctoPOS\setup.log`), turn it into a
       // clickable link that opens the file in Notepad via the
-      // open_setup_log Tauri command. Pure text fallback otherwise.
+      // open_setup_log Tauri command.
       function showError(text) {
         err.classList.add("visible");
-        msg.textContent = "";
         err.textContent = "";
         const pathRegex = /([A-Za-z]:\\[^\s"<>]+\.log)/g;
         let lastIndex = 0;
         let match;
         while ((match = pathRegex.exec(text)) !== null) {
           if (match.index > lastIndex) {
-            err.appendChild(
-              document.createTextNode(text.slice(lastIndex, match.index)),
-            );
+            err.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
           }
           const link = document.createElement("a");
           link.textContent = match[1];
@@ -218,44 +320,77 @@
         if (lastIndex === 0) err.textContent = text;
       }
 
-      function appendLog(stream, line) {
-        const span = document.createElement("span");
-        span.className = "line " + (stream === "stderr" ? "stderr" : "");
-        span.textContent = line;
-        log.appendChild(span);
-        // Keep the rolling window tight — we don't want a 30-min
-        // install with verbose docker pull output to balloon the DOM.
+      // Strip ANSI escape sequences so colored output from
+      // bash / docker / npm doesn't render as literal "[36m..." text.
+      const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
+      function stripAnsi(s) { return s.replace(ANSI_RE, ""); }
+
+      // docker pull emits one full line per progress update (no TTY
+      // means no \r overwrite). Without dedup, a 100MB layer floods
+      // the panel with hundreds of "Downloading [===>] X/Y" lines.
+      // Detect docker progress lines and rewrite the last span for
+      // the same (layerId, action) instead of appending a new one.
+      const DOCKER_PROGRESS_RE = /^([a-f0-9]{6,})\s+(Pulling|Downloading|Verifying|Extracting|Waiting|Download)\b/;
+      const progressNodes = new Map();
+
+      function appendNode(node) {
+        log.appendChild(node);
         while (log.childElementCount > MAX_LOG_LINES) {
-          log.removeChild(log.firstChild);
+          const removed = log.removeChild(log.firstChild);
+          for (const [k, v] of progressNodes) {
+            if (v === removed) progressNodes.delete(k);
+          }
         }
-        // Auto-scroll only if the user hasn't scrolled up to read.
         const nearBottom =
           log.scrollHeight - log.scrollTop - log.clientHeight < 40;
         if (nearBottom) log.scrollTop = log.scrollHeight;
       }
 
+      function appendLog(stream, line) {
+        const clean = stripAnsi(line);
+        const m = clean.match(DOCKER_PROGRESS_RE);
+        if (m) {
+          const key = m[1] + " " + m[2];
+          const existing = progressNodes.get(key);
+          if (existing) {
+            existing.textContent = clean;
+            return;
+          }
+          const span = document.createElement("span");
+          span.className = "line " + (stream === "stderr" ? "stderr" : "");
+          span.textContent = clean;
+          appendNode(span);
+          progressNodes.set(key, span);
+          return;
+        }
+        const span = document.createElement("span");
+        span.className = "line " + (stream === "stderr" ? "stderr" : "");
+        span.textContent = clean;
+        appendNode(span);
+      }
+
       function appendMeta(line) {
         const span = document.createElement("span");
         span.className = "line meta";
-        span.textContent = "[" + new Date().toLocaleTimeString() + "] " + line;
-        log.appendChild(span);
-        log.scrollTop = log.scrollHeight;
+        const time = document.createElement("span");
+        time.className = "time";
+        time.textContent = "[" + new Date().toLocaleTimeString() + "]";
+        span.appendChild(time);
+        span.appendChild(document.createTextNode("→ " + line));
+        appendNode(span);
       }
 
-      // window.__TAURI__ requires withGlobalTauri: true in
-      // tauri.conf.json. Guard against the case where it isn't there
-      // so we surface a real error instead of a frozen "Iniciando...".
       if (!window.__TAURI__) {
-        showError(
-          "El runtime de Tauri no esta disponible. Reinstala el bootstrapper.",
-        );
+        showError("El runtime de Tauri no esta disponible. Reinstala el bootstrapper.");
       } else {
         const { listen } = window.__TAURI__.event;
         const { invoke } = window.__TAURI__.core;
 
         listen("setup-progress", (event) => {
           const { percent, message } = event.payload;
-          fill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+          const p = Math.min(100, Math.max(0, percent));
+          fill.style.width = p + "%";
+          pct.textContent = p + "%";
           msg.textContent = message;
           appendMeta(message);
         });
@@ -270,12 +405,7 @@
           appendMeta("ERROR: " + m);
         });
 
-        // Kick off the install pipeline immediately. Rust steps are
-        // idempotent so re-runs (or runs on machines that already
-        // have WSL/Docker) breeze through the early ones in seconds.
-        invoke("start_install").catch((e) => {
-          showError(String(e));
-        });
+        invoke("start_install").catch((e) => showError(String(e)));
       }
     </script>
   </body>

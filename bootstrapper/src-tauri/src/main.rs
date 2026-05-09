@@ -737,6 +737,7 @@ fn register_wsl_autostart() -> Result<(), String> {
 #[cfg(windows)]
 fn schedule_self_uninstall() -> Result<(), String> {
     use std::io::Write;
+    use std::os::windows::process::CommandExt;
 
     // Write a tiny .bat to %TEMP% that:
     //   1. Waits ~5s so the bootstrapper process can fully exit
@@ -748,14 +749,22 @@ fn schedule_self_uninstall() -> Result<(), String> {
     //   3. Runs the uninstaller in silent mode (`/S`).
     //   4. Deletes the .bat itself so nothing stays behind.
     //
+    // Every command silences its own output (>nul 2>&1) and the
+    // PowerShell window is hidden — earlier versions surfaced an
+    // empty cmd window mid-shutdown saying "Not enough memory
+    // resources are available to process this command" because the
+    // child cmd's STDIO inherited a broken handle from the dying
+    // bootstrapper. With redirected I/O and a hidden window, the
+    // cleanup is invisible to the user.
+    //
     // Failures here are best-effort — if anything goes wrong the worst
     // case is the user still sees "OctoPOS Setup" in Programs and can
     // remove it by hand. We never let this break the install flow.
     let bat_path = std::env::temp_dir().join("octopos-setup-cleanup.bat");
     let bat_body = r#"@echo off
-timeout /t 5 /nobreak >nul
-powershell -NoProfile -Command "$e=(Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'OctoPOS Setup' } | Select-Object -First 1); if ($e) { $u = $e.UninstallString -replace '^\"|\"$',''; Start-Process -FilePath $u -ArgumentList '/S' -Wait }"
-del /f /q "%~f0"
+timeout /t 5 /nobreak >nul 2>&1
+powershell -NoProfile -WindowStyle Hidden -Command "try { $e=(Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'OctoPOS Setup' } | Select-Object -First 1); if ($e) { $u = $e.UninstallString -replace '^\"|\"$',''; Start-Process -FilePath $u -ArgumentList '/S' -Wait -WindowStyle Hidden } } catch {}" >nul 2>&1
+del /f /q "%~f0" >nul 2>&1
 "#;
     let mut f = std::fs::File::create(&bat_path)
         .map_err(|e| format!("create cleanup bat: {e}"))?;
@@ -763,14 +772,19 @@ del /f /q "%~f0"
         .map_err(|e| format!("write cleanup bat: {e}"))?;
     drop(f);
 
-    silent_command("cmd")
-        .args([
-            "/c",
-            "start",
-            "/min",
-            "",
-            bat_path.to_str().unwrap_or(""),
-        ])
+    // CREATE_NO_WINDOW + DETACHED_PROCESS together: the child cmd
+    // gets no console and is fully detached from our stdio handles.
+    // Stdio::null() ensures it doesn't inherit any of our pipes
+    // even by accident (which was the source of the "Not enough
+    // memory" pop-up — the child inherited a bad handle when the
+    // parent exited mid-spawn).
+    const CNW_DETACHED: u32 = CREATE_NO_WINDOW | 0x00000008;
+    std::process::Command::new("cmd")
+        .args(["/c", bat_path.to_str().unwrap_or("")])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CNW_DETACHED)
         .spawn()
         .map_err(|e| format!("spawn cleanup bat: {e}"))?;
     Ok(())
