@@ -200,6 +200,67 @@
         border-color: var(--text-dim);
       }
 
+      /* Final hand-off card shown when the install pipeline reports
+         setup-complete. Replaces the progress card. */
+      .done-card {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        padding: 20px;
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.10), rgba(16, 185, 129, 0.04));
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        border-radius: 12px;
+        flex-shrink: 0;
+      }
+      .done-card.visible { display: flex; }
+      .done-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #04241a;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        font-weight: 700;
+      }
+      .done-text {
+        text-align: center;
+        font-size: 14px;
+        color: var(--text);
+      }
+      .done-text small {
+        display: block;
+        font-size: 12px;
+        color: var(--text-dim);
+        margin-top: 4px;
+      }
+      .open-admin-btn {
+        background: linear-gradient(135deg, var(--accent), #059669);
+        color: #04241a;
+        border: 0;
+        padding: 10px 22px;
+        border-radius: 8px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        box-shadow: 0 6px 16px var(--accent-glow);
+        transition: transform 100ms ease, box-shadow 200ms ease;
+      }
+      .open-admin-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 22px var(--accent-glow);
+      }
+      .open-admin-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
       .log-pane {
         flex: 1;
         min-height: 0;
@@ -251,7 +312,7 @@
         </div>
       </div>
 
-      <div class="progress-card">
+      <div class="progress-card" id="progressCard">
         <div class="progress-row">
           <div class="progress-step" id="msg">Iniciando...</div>
           <div class="progress-percent" id="pct">0%</div>
@@ -259,6 +320,15 @@
         <div class="progress-bar">
           <div class="progress-fill" id="fill"></div>
         </div>
+      </div>
+
+      <div class="done-card" id="doneCard">
+        <div class="done-icon">✓</div>
+        <div class="done-text">
+          OctoPOS se instaló correctamente.
+          <small>Al hacer click el panel se abre y este instalador se cierra solo.</small>
+        </div>
+        <button type="button" id="openAdminBtn" class="open-admin-btn">Abrir OctoPOS Admin</button>
       </div>
 
       <div class="error" id="err"></div>
@@ -283,6 +353,9 @@
       const err = document.getElementById("err");
       const log = document.getElementById("log");
       const openLogBtn = document.getElementById("openLogBtn");
+      const progressCard = document.getElementById("progressCard");
+      const doneCard = document.getElementById("doneCard");
+      const openAdminBtn = document.getElementById("openAdminBtn");
 
       const MAX_LOG_LINES = 1000;
 
@@ -403,6 +476,26 @@
           const m = event.payload.message ?? "Error desconocido.";
           showError(m);
           appendMeta("ERROR: " + m);
+        });
+
+        // Install pipeline finished cleanly. Swap the progress card
+        // for the "Abrir OctoPOS Admin" hand-off card. The user
+        // explicitly clicks to launch the admin AND clean up the
+        // bootstrapper — no race against a blind sleep.
+        listen("setup-complete", () => {
+          progressCard.style.display = "none";
+          doneCard.classList.add("visible");
+          appendMeta("Instalacion finalizada — esperando al operador.");
+        });
+
+        openAdminBtn.addEventListener("click", () => {
+          openAdminBtn.disabled = true;
+          openAdminBtn.textContent = "Abriendo...";
+          invoke("finalize_install").catch((e) => {
+            showError(String(e));
+            openAdminBtn.disabled = false;
+            openAdminBtn.textContent = "Abrir OctoPOS Admin";
+          });
         });
 
         invoke("start_install").catch((e) => showError(String(e)));

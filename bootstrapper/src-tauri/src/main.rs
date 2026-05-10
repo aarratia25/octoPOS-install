@@ -71,7 +71,11 @@ fn main() {
 
     tauri::Builder::default()
         .manage(InstallState::default())
-        .invoke_handler(tauri::generate_handler![start_install, open_setup_log])
+        .invoke_handler(tauri::generate_handler![
+            start_install,
+            open_setup_log,
+            finalize_install,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running OctoPOS bootstrapper");
 }
@@ -109,6 +113,28 @@ fn relaunch_as_admin() -> Result<(), String> {
         .args(["-NoProfile", "-Command", &ps_command])
         .spawn()
         .map_err(|e| format!("spawn elevated child: {e}"))?;
+    Ok(())
+}
+
+/// Final hand-off invoked by the splash when the operator clicks
+/// "Abrir OctoPOS Admin" after install completes. Launches the admin
+/// (so the user sees the activation screen immediately), schedules
+/// the bootstrapper's own NSIS uninstaller, then exits this process.
+/// Doing the whole sequence here — instead of from a timer at the
+/// end of run_install — guarantees that:
+///   - The admin is launched after the user explicitly asked for it
+///     (no surprising "ya se abrió solo").
+///   - The bootstrapper exits while the user is looking at the
+///     admin window, so the cleanup .bat sees the .exe gone within
+///     its first poll iteration instead of racing a 5s sleep.
+#[tauri::command]
+fn finalize_install(handle: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = launch_admin();
+        let _ = schedule_self_uninstall();
+    }
+    handle.exit(0);
     Ok(())
 }
 
@@ -249,18 +275,14 @@ fn run_install(handle: &AppHandle) -> Result<(), String> {
     // clicked it. Trust the MSI installer to own its own shortcut.
 
     progress(handle, 100, "Listo. OctoPOS esta instalado.");
-    std::thread::sleep(std::time::Duration::from_secs(2));
-
-    let _ = launch_admin();
-    // Stub-installer pattern (Chrome / Discord style): the bootstrapper
-    // is a one-shot. Once the admin .msi is installed and the companion
-    // service is wired, the bootstrapper has nothing to offer — keeping
-    // its entry in Add/Remove Programs invites accidental re-runs that
-    // would re-pull images and rewrite `.env`. Schedule a deferred
-    // self-uninstall and exit; the user only sees "OctoPOS Admin" in
-    // Programs from now on.
-    let _ = schedule_self_uninstall();
-    handle.exit(0);
+    // Hand control to the user via the splash UI. The JS listens for
+    // `setup-complete`, swaps the progress card for an "Abrir OctoPOS
+    // Admin" button, and only invokes `finalize_install` (which
+    // launches the admin + auto-uninstalls the bootstrapper) once
+    // the user clicks. No more racey sleeps — the bootstrapper
+    // process is guaranteed to be ready to die because the user
+    // explicitly told us to.
+    let _ = handle.emit("setup-complete", ());
     Ok(())
 }
 
