@@ -64,6 +64,32 @@ foreach ($name in @('OctoPOS WSL Autostart', 'OctoPOSSetupCleanup')) {
 }
 if ($removedTasks -eq 0) { Skip 'Ninguna registrada.' }
 
+Step 'Cerrando OctoPOS Admin si esta corriendo...'
+$killedAdmin = 0
+# El binario se llama octopos-admin.exe (Cargo package name) aunque
+# el productName de display sea "OctoPOS Admin". Matamos ambos por
+# si en futuro cambia el nombre.
+Get-Process -Name 'octopos-admin','OctoPOS Admin' -ErrorAction SilentlyContinue |
+    ForEach-Object {
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        $killedAdmin++
+    }
+# WebView2 hosts the Tauri UI as a separate child process tree; el
+# admin lanza varios `msedgewebview2.exe`. Sin matarlos quedan
+# huerfanos consumiendo RAM.
+Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainModule.FileName -like '*OctoPOS*' -or $_.Path -like '*OctoPOS*' } |
+    ForEach-Object {
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        $killedAdmin++
+    }
+if ($killedAdmin -gt 0) {
+    Success "$killedAdmin proceso(s) cerrado(s)."
+    Start-Sleep -Milliseconds 500   # Que Windows libere handles del binario
+} else {
+    Skip 'No estaba corriendo.'
+}
+
 Step 'Desinstalando OctoPOS Admin (.msi)...'
 $adminEntries = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
     Where-Object { $_.DisplayName -eq 'OctoPOS Admin' }
@@ -74,6 +100,16 @@ if ($adminEntries) {
         Start-Process msiexec -ArgumentList "/x $code /quiet /qn" -Wait
     }
     Success 'Admin desinstalado.'
+    # Despues del msiexec verificar que el directorio de Program Files
+    # se haya borrado. Si quedo algo, forzar limpieza manual.
+    $adminDir = Join-Path $env:ProgramFiles 'OctoPOS Admin'
+    if (Test-Path $adminDir) {
+        Write-Host "    msiexec dejo residuos en $adminDir, limpiando manualmente..." -ForegroundColor Yellow
+        Remove-Item $adminDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $adminDir) {
+            Warn "No se pudo borrar $adminDir (handle abierto?)."
+        }
+    }
 } else {
     Skip 'No estaba instalado.'
 }

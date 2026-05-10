@@ -529,15 +529,22 @@ fn wait_for_api_health(handle: &AppHandle) -> Result<(), String> {
 
 #[cfg(windows)]
 fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
-
     // Pull metadata for the latest published admin release from the
     // public mirror repo. We hit the GitHub REST API with curl
     // (ships with Windows 10 1803+), parse the JSON with serde, and
-    // pick the first .msi asset. Doing this at install time means
-    // the bootstrapper itself does not have to be rebuilt every
-    // time we publish a new admin version — running an old
-    // OctoPOS-Setup.exe still installs whatever the latest release
-    // says is current.
+    // pick the first NSIS .exe asset (NOT the .msi).
+    //
+    // We deliberately install the NSIS `-setup.exe` rather than the
+    // .msi because Tauri's NSIS template honours `installerHooks`
+    // (we use them to taskkill octopos-admin.exe before
+    // (un)install). MSI uninstalls from Control Panel just delete
+    // files without ever asking the running process to close, so the
+    // operator was left with a "ghost admin" — binary gone from
+    // disk, process still alive in RAM. The NSIS hooks fix that
+    // case AND the upgrade-while-running case.
+    //
+    // Doing the lookup at install time means an old bootstrapper
+    // still installs whatever the latest release says is current.
     let api_url = "https://api.github.com/repos/aarratia25/octoPOS-releases/releases/latest";
     let metadata_out = silent_command("curl")
         .args([
@@ -563,25 +570,32 @@ fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
         .get("assets")
         .and_then(|a| a.as_array())
         .ok_or_else(|| "Respuesta de GitHub sin 'assets'.".to_string())?;
-    let msi_asset = assets
+    // Pick the admin NSIS installer — name pattern looks like
+    // "OctoPOS.Admin_X.Y.Z_x64-setup.exe". Filter on `setup.exe`
+    // suffix so we don't pick up the bootstrapper "OctoPOS-Setup-*".
+    let exe_asset = assets
         .iter()
         .find(|a| {
             a.get("name")
                 .and_then(|n| n.as_str())
-                .is_some_and(|n| n.to_lowercase().ends_with(".msi"))
+                .is_some_and(|n| {
+                    let lower = n.to_lowercase();
+                    lower.contains("admin")
+                        && lower.ends_with("setup.exe")
+                })
         })
-        .ok_or_else(|| "El ultimo release no tiene un .msi.".to_string())?;
-    let msi_url = msi_asset
+        .ok_or_else(|| "El ultimo release no tiene un -setup.exe del admin.".to_string())?;
+    let exe_url = exe_asset
         .get("browser_download_url")
         .and_then(|u| u.as_str())
-        .ok_or_else(|| "Asset .msi sin browser_download_url.".to_string())?;
-    let msi_name = msi_asset
+        .ok_or_else(|| "Asset -setup.exe sin browser_download_url.".to_string())?;
+    let exe_name = exe_asset
         .get("name")
         .and_then(|n| n.as_str())
-        .unwrap_or("OctoPOS-Admin.msi");
+        .unwrap_or("OctoPOS.Admin-setup.exe");
 
     let temp_dir = std::env::temp_dir();
-    let temp_msi = temp_dir.join(msi_name);
+    let temp_exe = temp_dir.join(exe_name);
 
     let download_status = silent_command("curl")
         .args([
@@ -589,37 +603,33 @@ fn install_admin_msi(_embedded: &std::path::Path) -> Result<(), String> {
             "-H",
             "User-Agent: OctoPOS-Setup",
             "-o",
-            temp_msi.to_str().unwrap_or(""),
-            msi_url,
+            temp_exe.to_str().unwrap_or(""),
+            exe_url,
         ])
         .status()
         .map_err(|e| format!("curl download: {e}"))?;
     if !download_status.success() {
         return Err(format!(
-            "Descarga del .msi fallo (codigo {}).",
+            "Descarga del .exe fallo (codigo {}).",
             download_status.code().unwrap_or(-1)
         ));
     }
 
-    let install_status = silent_command("msiexec")
-        .args([
-            "/i",
-            temp_msi.to_str().unwrap_or(""),
-            "/quiet",
-            "/qn",
-        ])
+    // /S = NSIS silent mode; same flag the auto-update path will use.
+    let install_status = silent_command(temp_exe.to_str().unwrap_or(""))
+        .arg("/S")
         .status()
-        .map_err(|e| format!("msiexec spawn: {e}"))?;
+        .map_err(|e| format!("admin installer spawn: {e}"))?;
     if !install_status.success() {
         return Err(format!(
-            "msiexec termino con codigo {}",
+            "Admin installer termino con codigo {}",
             install_status.code().unwrap_or(-1)
         ));
     }
 
     // Best-effort cleanup; if the file lingers in %TEMP% Windows
     // cleans it on its own at the next disk-cleanup pass.
-    let _ = std::fs::remove_file(&temp_msi);
+    let _ = std::fs::remove_file(&temp_exe);
 
     Ok(())
 }
@@ -854,26 +864,59 @@ fn schedule_self_uninstall() -> Result<(), String> {
     //   3. Exit the bootstrapper. By the time the task fires, the
     //      .exe is gone and NSIS can do its job.
     let ps1_path = std::env::temp_dir().join("octopos-setup-cleanup.ps1");
-    let ps1_body = r#"# Wait for the bootstrapper process to fully exit (NSIS refuses to
-# delete a running binary). Polling Get-Process is silent.
+    // Logging built-in so the operator (and us) can pinpoint why a
+    // failed cleanup happened. Every step appends to
+    // %ProgramData%\OctoPOS\uninstall-log.txt — survives the
+    // .ps1's self-delete and gives a clear rcause to a support
+    // engineer who runs the diagnostic later.
+    let ps1_body = r#"$ErrorActionPreference = 'Continue'
+$logDir = Join-Path $env:ProgramData 'OctoPOS'
+if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
+$logPath = Join-Path $logDir 'uninstall-log.txt'
+function L($msg) { "$([DateTime]::UtcNow.ToString('o')) $msg" | Add-Content -LiteralPath $logPath }
+
+L "=== cleanup ps1 starting; user=$env:USERNAME pid=$PID ==="
+
+# Wait for the bootstrapper to die so NSIS can replace its files.
+$waited = 0
 while (Get-Process -Name 'octopos-bootstrapper' -ErrorAction SilentlyContinue) {
+    if ($waited -gt 60) { L "Bootstrapper still alive after 60s — bailing"; break }
     Start-Sleep -Seconds 1
+    $waited++
 }
+L "Bootstrapper waited $waited s"
 Start-Sleep -Seconds 2
 
 try {
     $entry = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
         Where-Object { $_.DisplayName -eq 'OctoPOS Setup' } |
         Select-Object -First 1
-    if ($entry) {
+    if (-not $entry) { L "No ARP entry for 'OctoPOS Setup' — already gone?" }
+    else {
         $u = $entry.UninstallString -replace '^"|"$', ''
-        Start-Process -FilePath $u -ArgumentList '/S' -Wait
+        L "Invoking NSIS uninstaller: $u /S"
+        $p = Start-Process -FilePath $u -ArgumentList '/S' -Wait -PassThru -ErrorAction Stop
+        L "NSIS uninstall finished with exit code $($p.ExitCode)"
     }
-} catch {}
+} catch {
+    L "Uninstall threw: $($_.Exception.Message)"
+}
 
-# Self-cleanup — drop the task and the script.
-schtasks /delete /tn 'OctoPOSSetupCleanup' /f 2>$null | Out-Null
+# Best-effort cleanup of leftovers NSIS might miss.
+foreach ($shortcut in @(
+    (Join-Path $env:PUBLIC 'Desktop\OctoPOS Setup.lnk'),
+    (Join-Path $env:USERPROFILE 'Desktop\OctoPOS Setup.lnk')
+)) {
+    if (Test-Path $shortcut) {
+        Remove-Item -Force $shortcut -ErrorAction SilentlyContinue
+        L "Removed stray shortcut: $shortcut"
+    }
+}
+
+L "Removing scheduled task and self"
+schtasks /delete /tn 'OctoPOSSetupCleanup' /f *> $null
 Remove-Item -Force $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
+L "=== cleanup ps1 done ==="
 "#;
     let mut f = std::fs::File::create(&ps1_path)
         .map_err(|e| format!("create cleanup ps1: {e}"))?;
@@ -881,24 +924,40 @@ Remove-Item -Force $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
         .map_err(|e| format!("write cleanup ps1: {e}"))?;
     drop(f);
 
-    // Schedule the task as SYSTEM, fired 1 minute from now. We let
-    // PowerShell compute the local-time HH:mm string so we don't
-    // have to fight std::time + timezone math in Rust. /RU SYSTEM is
-    // the key that guarantees the uninstall runs with full rights.
-    let ps1_quoted = ps1_path.to_string_lossy().replace('\'', "''");
+    // schtasks.exe + HH:mm time arg has nasty edge cases (the time
+    // wraps at midnight, the parser is locale-sensitive, the /tr
+    // argument double-quoting is broken on long paths with spaces).
+    // Use the modern PowerShell scheduled-task cmdlets instead —
+    // they take strongly-typed Trigger / Action / Principal objects
+    // and don't depend on string formatting. Also write a marker file
+    // so we know from the diagnostic whether the schedule call
+    // even completed.
+    let marker_path = std::env::temp_dir().join("octopos-cleanup-scheduled.txt");
+    let ps1_for_register = ps1_path.to_string_lossy().replace('\'', "''");
+    let marker_for_register = marker_path.to_string_lossy().replace('\'', "''");
     let schedule_command = format!(
-        "$time = (Get-Date).AddSeconds(60).ToString('HH:mm'); \
-         schtasks /create /tn 'OctoPOSSetupCleanup' \
-           /tr ('powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"' + '{ps1_quoted}' + '\"') \
-           /sc once /st $time /ru SYSTEM /rl HIGHEST /f | Out-Null"
+        "$ErrorActionPreference = 'Stop'; \
+         $argLine = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"' + '{ps1_for_register}' + '\"'; \
+         $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argLine; \
+         $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(45)); \
+         $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; \
+         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DeleteExpiredTaskAfter ([TimeSpan]::FromMinutes(5)); \
+         Register-ScheduledTask -TaskName 'OctoPOSSetupCleanup' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null; \
+         Set-Content -LiteralPath '{marker_for_register}' -Value ('scheduled at ' + [DateTime]::UtcNow.ToString('o'))"
     );
-    silent_command("powershell")
+    let status = silent_command("powershell")
         .args(["-NoProfile", "-Command", &schedule_command])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map_err(|e| format!("schtasks scheduling: {e}"))?;
+        .map_err(|e| format!("schedule task: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "Register-ScheduledTask exited with code {}",
+            status.code().unwrap_or(-1)
+        ));
+    }
     Ok(())
 }
 
