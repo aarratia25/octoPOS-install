@@ -52,14 +52,17 @@ if ($svc) {
     Skip 'No estaba registrado.'
 }
 
-Step 'Borrando tarea programada al boot...'
-$task = Get-ScheduledTask -TaskName 'OctoPOS WSL Autostart' -ErrorAction SilentlyContinue
-if ($task) {
-    & schtasks /delete /tn 'OctoPOS WSL Autostart' /f | Out-Null
-    Success 'Tarea borrada.'
-} else {
-    Skip 'No estaba registrada.'
+Step 'Borrando tareas programadas...'
+$removedTasks = 0
+foreach ($name in @('OctoPOS WSL Autostart', 'OctoPOSSetupCleanup')) {
+    $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+    if ($task) {
+        & schtasks /delete /tn $name /f 2>$null | Out-Null
+        Write-Host "    borrada: $name" -ForegroundColor Green
+        $removedTasks++
+    }
 }
+if ($removedTasks -eq 0) { Skip 'Ninguna registrada.' }
 
 Step 'Desinstalando OctoPOS Admin (.msi)...'
 $adminEntries = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |

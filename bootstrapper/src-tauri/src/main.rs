@@ -833,49 +833,72 @@ fn schedule_self_uninstall() -> Result<(), String> {
     // Failures here are best-effort — if anything goes wrong the worst
     // case is the user still sees "OctoPOS Setup" in Programs and can
     // remove it by hand. We never let this break the install flow.
-    let bat_path = std::env::temp_dir().join("octopos-setup-cleanup.bat");
-    // - Wait in a poll loop until octopos-bootstrapper.exe is actually
-    //   gone (NSIS refuses to delete a running binary). The previous
-    //   blind 5s sleep wasn't enough when the admin was still
-    //   spinning up at exit time and the bootstrapper process kept
-    //   the .exe handle open longer than expected.
-    // - Extra 3s grace after the process dies so SCM / NTFS release
-    //   the file handles fully.
-    // - PowerShell still hidden, but the spawned uninstaller runs
-    //   without -WindowStyle Hidden so NSIS can do its housekeeping
-    //   (some NSIS scripts fail when the host window is invisible).
-    let bat_body = r#"@echo off
-:wait_for_exit
-tasklist /FI "IMAGENAME eq octopos-bootstrapper.exe" 2>NUL | find /I "octopos-bootstrapper.exe" >NUL
-if not errorlevel 1 (
-    timeout /t 1 /nobreak >nul 2>&1
-    goto wait_for_exit
-)
-timeout /t 3 /nobreak >nul 2>&1
-powershell -NoProfile -WindowStyle Hidden -Command "try { $e=(Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'OctoPOS Setup' } | Select-Object -First 1); if ($e) { $u = $e.UninstallString -replace '^\"|\"$',''; Start-Process -FilePath $u -ArgumentList '/S' -Wait } } catch {}" >nul 2>&1
-del /f /q "%~f0" >nul 2>&1
+    // Earlier attempts (deferred .bat / .ps1 with admin inheritance)
+    // failed in the field: the child loses the admin token the
+    // moment the bootstrapper exit()s, and NSIS uninstall silently
+    // bails because it cannot write to Program Files without it.
+    //
+    // The reliable path is to delegate the uninstall to a Windows
+    // Scheduled Task running as SYSTEM. The Task Scheduler is a
+    // service running with full kernel privileges; every command it
+    // launches inherits SYSTEM token, so NSIS gets every permission
+    // it needs (Program Files writes, registry HKLM, public
+    // shortcuts) without a single UAC prompt.
+    //
+    // Flow:
+    //   1. Write a .ps1 that polls until octopos-bootstrapper.exe
+    //      is gone, runs the NSIS uninstaller silently, then deletes
+    //      both the scheduled task entry and itself.
+    //   2. Create a one-time scheduled task to fire 1 minute from
+    //      now under SYSTEM that runs the .ps1 hidden.
+    //   3. Exit the bootstrapper. By the time the task fires, the
+    //      .exe is gone and NSIS can do its job.
+    let ps1_path = std::env::temp_dir().join("octopos-setup-cleanup.ps1");
+    let ps1_body = r#"# Wait for the bootstrapper process to fully exit (NSIS refuses to
+# delete a running binary). Polling Get-Process is silent.
+while (Get-Process -Name 'octopos-bootstrapper' -ErrorAction SilentlyContinue) {
+    Start-Sleep -Seconds 1
+}
+Start-Sleep -Seconds 2
+
+try {
+    $entry = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -eq 'OctoPOS Setup' } |
+        Select-Object -First 1
+    if ($entry) {
+        $u = $entry.UninstallString -replace '^"|"$', ''
+        Start-Process -FilePath $u -ArgumentList '/S' -Wait
+    }
+} catch {}
+
+# Self-cleanup — drop the task and the script.
+schtasks /delete /tn 'OctoPOSSetupCleanup' /f 2>$null | Out-Null
+Remove-Item -Force $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
 "#;
-    let mut f = std::fs::File::create(&bat_path)
-        .map_err(|e| format!("create cleanup bat: {e}"))?;
-    f.write_all(bat_body.as_bytes())
-        .map_err(|e| format!("write cleanup bat: {e}"))?;
+    let mut f = std::fs::File::create(&ps1_path)
+        .map_err(|e| format!("create cleanup ps1: {e}"))?;
+    f.write_all(ps1_body.as_bytes())
+        .map_err(|e| format!("write cleanup ps1: {e}"))?;
     drop(f);
 
-    // CREATE_NO_WINDOW + DETACHED_PROCESS together: the child cmd
-    // gets no console and is fully detached from our stdio handles.
-    // Stdio::null() ensures it doesn't inherit any of our pipes
-    // even by accident (which was the source of the "Not enough
-    // memory" pop-up — the child inherited a bad handle when the
-    // parent exited mid-spawn).
-    const CNW_DETACHED: u32 = CREATE_NO_WINDOW | 0x00000008;
-    std::process::Command::new("cmd")
-        .args(["/c", bat_path.to_str().unwrap_or("")])
+    // Schedule the task as SYSTEM, fired 1 minute from now. We let
+    // PowerShell compute the local-time HH:mm string so we don't
+    // have to fight std::time + timezone math in Rust. /RU SYSTEM is
+    // the key that guarantees the uninstall runs with full rights.
+    let ps1_quoted = ps1_path.to_string_lossy().replace('\'', "''");
+    let schedule_command = format!(
+        "$time = (Get-Date).AddSeconds(60).ToString('HH:mm'); \
+         schtasks /create /tn 'OctoPOSSetupCleanup' \
+           /tr ('powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"' + '{ps1_quoted}' + '\"') \
+           /sc once /st $time /ru SYSTEM /rl HIGHEST /f | Out-Null"
+    );
+    silent_command("powershell")
+        .args(["-NoProfile", "-Command", &schedule_command])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .creation_flags(CNW_DETACHED)
-        .spawn()
-        .map_err(|e| format!("spawn cleanup bat: {e}"))?;
+        .status()
+        .map_err(|e| format!("schtasks scheduling: {e}"))?;
     Ok(())
 }
 
