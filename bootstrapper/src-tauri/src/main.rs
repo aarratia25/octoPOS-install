@@ -13,10 +13,13 @@
 )]
 
 use serde::Serialize;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 #[cfg(windows)]
 use tauri::Manager;
+
+mod telemetry;
+use telemetry::{Outcome as TelemetryOutcome, TelemetryContext};
 
 #[derive(Clone, Serialize)]
 struct ProgressEvent {
@@ -43,6 +46,13 @@ struct LogLineEvent {
 struct InstallState {
     started: Mutex<bool>,
 }
+
+/// Shared across the install pipeline. Carries the installId +
+/// hwFingerprint + accumulated state used by every periodic upload.
+/// Set once at the top of run_install() and read by progress() +
+/// the final upload at handle.exit time.
+#[cfg(windows)]
+static TELEMETRY: std::sync::OnceLock<Arc<TelemetryContext>> = std::sync::OnceLock::new();
 
 fn main() {
     // Self-elevate before Tauri spins up. Embedding a manifest in the
@@ -155,7 +165,35 @@ fn start_install(
     std::thread::spawn(move || {
         // Tiny grace period to let the window paint.
         std::thread::sleep(std::time::Duration::from_millis(120));
-        if let Err(e) = run_install(&h) {
+        // Initialize telemetry once for this install attempt. Any
+        // subsequent progress() ticks reuse the same installId and
+        // hwFingerprint, so the platform sees coherent rows.
+        #[cfg(windows)]
+        {
+            let ctx = Arc::new(TelemetryContext::new());
+            let _ = TELEMETRY.set(ctx);
+        }
+        let result = run_install(&h);
+        #[cfg(windows)]
+        if let Some(ctx) = TELEMETRY.get() {
+            match &result {
+                Ok(()) => ctx.upload(
+                    TelemetryOutcome::Success,
+                    None,
+                    None,
+                    &setup_log_path(),
+                    true,
+                ),
+                Err(e) => ctx.upload(
+                    TelemetryOutcome::Error,
+                    Some("run_install"),
+                    Some(e),
+                    &setup_log_path(),
+                    true,
+                ),
+            }
+        }
+        if let Err(e) = result {
             let _ = h.emit("setup-error", ErrorEvent { message: e });
         }
     });
@@ -234,6 +272,19 @@ fn run_install(handle: &AppHandle) -> Result<(), String> {
 
 fn progress(handle: &AppHandle, percent: u8, message: &str) {
     log::info!("[{}%] {}", percent, message);
+    // Periodic telemetry upload — throttled internally to one per
+    // 30s so calling it on every step is cheap. Best-effort: any
+    // network failure is swallowed inside upload().
+    #[cfg(windows)]
+    if let Some(ctx) = TELEMETRY.get() {
+        ctx.upload(
+            TelemetryOutcome::InProgress,
+            None,
+            None,
+            &setup_log_path(),
+            false,
+        );
+    }
     let _ = handle.emit(
         "setup-progress",
         ProgressEvent {

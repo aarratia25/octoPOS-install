@@ -31,3 +31,10 @@ log = "0.4"
 # tiny, well-maintained crate (used by `rand`, `uuid`, etc.) so the
 # dependency cost is negligible.
 getrandom = "0.2"
+# Telemetry: gzip + http upload of setup.log to platform.octo-pos.net
+# so install attempts (success or fail) end up in the central portal
+# without anyone having to ask the operator for the log file.
+flate2 = "1"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
